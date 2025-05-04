@@ -75,6 +75,13 @@ impl Response {
         self.status.canonical_reason().unwrap_or("Unknown")
     }
 
+    pub fn send_status(&mut self, code: u16) -> &mut Self {
+        self.status_code(code);
+        let message = self.status_text();
+        self.r#type(HeaderValue::from_static("text/plain; charset=utf-8"))
+            .send(message)
+    }
+
     pub fn set<K: IntoHeaderName, V: Into<HeaderValue>>(&mut self, key: K, val: V) -> &mut Self {
         self.headers.insert(key, val.into());
         self
@@ -155,15 +162,60 @@ impl Response {
 
     pub fn redirect(&mut self, location: impl AsRef<str>) -> &mut Self {
         self.status = StatusCode::PERMANENT_REDIRECT;
-        let location = location.as_ref();
-
-        self.set(header::LOCATION, sanitize_header_value(location));
+        self.location(location);
         self.end()
+    }
+
+    pub fn location(&mut self, url: impl AsRef<str>) -> &mut Self {
+        self.set(header::LOCATION, sanitize_header_value(url.as_ref()));
+        self
     }
 
     #[inline]
     pub fn r#type(&mut self, mime: impl Into<HeaderValue>) -> &mut Self {
         self.set(header::CONTENT_TYPE, mime);
+        self
+    }
+
+    pub fn attachment(&mut self, filename: Option<&str>) -> &mut Self {
+        if let Some(name) = filename {
+            self.r#type(
+                HeaderValue::from_str(
+                    mime_guess::from_path(name)
+                        .first_or_octet_stream()
+                        .essence_str(),
+                )
+                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+            );
+        }
+
+        if filename.is_none() {
+            self.set(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment"),
+            );
+            return self;
+        }
+
+        self.set(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename.unwrap()))
+                .unwrap_or(HeaderValue::from_static("attachment")),
+        );
+        self
+    }
+
+    pub fn links(&mut self, links: std::collections::HashMap<&str, &str>) -> &mut Self {
+        let value = links
+            .into_iter()
+            .map(|(rel, url)| format!("<{}>; rel=\"{}\"", url, rel))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Ok(header_value) = HeaderValue::from_str(&value) {
+            self.set(header::LINK, header_value);
+        } else {
+            eprintln!("Invalid header value for LINK: {}", value);
+        }
         self
     }
 

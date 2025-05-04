@@ -17,3 +17,5 @@ target/
 #.idea/
 
 expressjs_tests/
+
+.DS_Store
