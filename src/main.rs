@@ -80,6 +80,10 @@ async fn main() {
         res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
     });
 
+    app.get("/file", |_req: &Request, res: &mut Response, _| {
+        res.send_file("./Cargo.lock");
+    });
+
     app.get(
         "/hello",
         |_req: &Request, res: &mut Response, next: Box<dyn FnOnce() + Send>| {
