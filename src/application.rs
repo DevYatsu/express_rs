@@ -62,22 +62,20 @@ impl App {
     }
 }
 
-use http_body_util::Full;
-use hyper::body::{Bytes, Incoming};
+use hyper::body::{Body, Bytes, Incoming};
 use hyper::service::Service;
 use hyper::{Request, Response};
 
 impl Service<Request<Incoming>> for App {
-    type Response = Response<Full<Bytes>>;
+    type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>>;
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
         let mut response_builder = ExpressResponse::default();
-
         self.handle(req, &mut response_builder);
 
-        let response = response_builder.into_hyper();
+        let response = response_builder.into_hyper_streaming();
 
         Box::pin(async move { Ok(response) })
     }

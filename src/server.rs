@@ -1,11 +1,11 @@
-use http_body_util::Full;
-use hyper::body::Bytes;
+use hyper::body::{Body, Bytes};
 use hyper::server::conn::http1;
 use hyper::service::Service;
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use tokio::net::TcpListener;
 
 pub struct Server;
@@ -17,8 +17,11 @@ impl Server {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         F: Fn() -> S + Send + Sync + 'static + Clone,
-        S: Service<Request<Incoming>, Response = Response<Full<Bytes>>, Error = Infallible>
-            + Send
+        S: Service<
+                Request<Incoming>,
+                Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>>,
+                Error = Infallible,
+            > + Send
             + 'static,
         S::Future: Send + 'static,
     {
