@@ -60,7 +60,7 @@ async fn main() {
         "#;
 
         res.status_code(200)
-            .r#type(HeaderValue::from_static("text/html; charset=utf-8"))
+            .r#type("text/html; charset=utf-8")
             .send(html);
     });
 
