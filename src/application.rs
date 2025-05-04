@@ -1,6 +1,5 @@
-use crate::express::Next;
 use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
-use crate::router::Router;
+use crate::router::{Middleware, Router};
 use crate::server::Server;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -13,18 +12,25 @@ pub struct App {
     pub cache: HashMap<String, u32>,
     pub engines: Vec<u32>,
     pub settings: HashMap<String, u32>,
-    pub _router: Option<Router>,
+    pub router: Option<Router>,
 }
 
 impl App {
-    pub fn handle(&self, req: ExpressRequest, res: &mut ExpressResponse, next: Next) {
-        self._router.as_ref().unwrap().handle(req, res, next);
+    pub fn handle(&self, req: ExpressRequest, res: &mut ExpressResponse) {
+        self.router.as_ref().unwrap().handle(req, res);
     }
 
-    pub fn lazy_router(&mut self) {
-        if self._router.is_none() {
-            self._router = Some(Router::default());
+    pub fn lazyrouter(&mut self) {
+        if self.router.is_none() {
+            let router = Router::default();
+
+            self.router = Some(router);
         }
+    }
+
+    pub fn use_with<M: Middleware>(&mut self, middleware: M) {
+        self.lazyrouter();
+        self.router.as_mut().unwrap().use_with(middleware);
     }
 
     pub async fn listen<T: FnOnce()>(self, port: u16, callback: T) {
@@ -69,7 +75,7 @@ impl Service<Request<Incoming>> for App {
     fn call(&self, req: Request<Incoming>) -> Self::Future {
         let mut response_builder = ExpressResponse::default();
 
-        self.handle(req, &mut response_builder, Next);
+        self.handle(req, &mut response_builder);
 
         let response = response_builder.into_hyper();
 
@@ -87,10 +93,15 @@ macro_rules! generate_methods {
         impl App {
             $(
                 pub fn $method(&mut self, path: impl AsRef<Path>, handle: impl Into<Handler>) -> &mut Self {
-                    self.lazy_router();
+                    self.lazyrouter();
                     let handler = handle.into();
-                    let route = self._router.as_mut().unwrap().route(path, handler.clone());
+                    let route = self.router.as_mut().unwrap().route(path, handler.clone());
                     route.$method(handler);
+
+                    if cfg!(debug_assertions) {
+                        println!("route: {:?}", route);
+                    }
+
 
                     self
                 }

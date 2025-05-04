@@ -3,8 +3,13 @@ use http_body_util::Full;
 use hyper::{
     HeaderMap, Response as HyperResponse, StatusCode,
     body::Bytes,
-    header::{HeaderName, HeaderValue, IntoHeaderName},
+    header::{
+        self, CACHE_CONTROL, EXPIRES, HeaderName, HeaderValue, IntoHeaderName, PRAGMA, SERVER,
+        X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
+    },
 };
+use itoa::Buffer;
+use once_cell::sync::Lazy;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Default)]
@@ -14,6 +19,23 @@ pub struct Response {
     headers: HeaderMap,
     ended: bool,
 }
+
+const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
+    let mut map = HeaderMap::new();
+    map.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    map.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+
+    map.insert(EXPIRES, HeaderValue::from_static("0"));
+    map.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    map.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+    map.insert(X_XSS_PROTECTION, HeaderValue::from_static("0"));
+    map.insert(SERVER, HeaderValue::from_static(""));
+
+    map
+});
 
 impl Response {
     pub fn new() -> Self {
@@ -31,11 +53,24 @@ impl Response {
         self
     }
 
-    pub fn status(&mut self, status: u16) -> &mut Self {
-        self.status = StatusCode::from_u16(status).expect("Invalid status code");
+    #[inline]
+    pub fn is_ended(&self) -> bool {
+        self.ended
+    }
+
+    #[inline]
+    pub fn status(&mut self, status: impl Into<StatusCode>) -> &mut Self {
+        self.status = status.into();
         self
     }
 
+    #[inline]
+    pub fn status_code(&mut self, status: u16) -> &mut Self {
+        self.status = StatusCode::from_u16(status).expect("Expected status code in 100..=1000");
+        self
+    }
+
+    #[inline]
     pub fn status_text(&self) -> &'static str {
         self.status.canonical_reason().unwrap_or("Unknown")
     }
@@ -63,21 +98,23 @@ impl Response {
         self.body.reserve(data.len());
         self.body.extend_from_slice(data);
 
-        self.set(
-            HeaderName::from_static("Content-Length"),
-            HeaderValue::from(data.len()),
-        );
+        // retrieve len and stringify it, faster than to_string
+        let mut buf = Buffer::new();
+        let len_str = buf.format(data.len());
+
+        if let Ok(val) = HeaderValue::from_str(len_str) {
+            self.set(header::CONTENT_LENGTH, val);
+        }
 
         if self.headers.get("content-type").is_none() {
-            // Best guess: plain text if it's utf8
             if std::str::from_utf8(data).is_ok() {
                 self.set(
-                    HeaderName::from_static("Content-Type"),
+                    header::CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"),
                 );
             } else {
                 self.set(
-                    HeaderName::from_static("Content-Type"),
+                    header::CONTENT_TYPE,
                     HeaderValue::from_static("application/octet-stream"),
                 );
             }
@@ -86,10 +123,25 @@ impl Response {
         self.end()
     }
 
+    pub fn send_static(&mut self, data: &'static [u8]) -> &mut Self {
+        self.body.clear();
+        self.body.extend_from_slice(data);
+
+        // retrieve len and stringify it, faster than to_string
+        let mut buf = Buffer::new();
+        let len_str = buf.format(data.len());
+
+        if let Ok(val) = HeaderValue::from_str(len_str) {
+            self.set(header::CONTENT_LENGTH, val);
+        }
+
+        self.end()
+    }
+
     pub fn json<T: serde::Serialize>(&mut self, value: T) -> &mut Self {
         let json = serde_json::to_vec(&value).expect("Failed to serialize JSON");
         self.set(
-            HeaderName::from_static("Content-Type"),
+            header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
         self.send(json)
@@ -101,18 +153,17 @@ impl Response {
         self
     }
 
-    pub fn redirect(&mut self, location: impl Into<HeaderValue>) -> &mut Self {
-        self.status = StatusCode::FOUND;
-        self.set(HeaderName::from_static("Location"), location);
-        self.set(
-            HeaderName::from_static("Content-Length"),
-            HeaderValue::from_static("0"),
-        );
+    pub fn redirect(&mut self, location: impl AsRef<str>) -> &mut Self {
+        self.status = StatusCode::PERMANENT_REDIRECT;
+        let location = location.as_ref();
+
+        self.set(header::LOCATION, sanitize_header_value(location));
         self.end()
     }
 
+    #[inline]
     pub fn r#type(&mut self, mime: impl Into<HeaderValue>) -> &mut Self {
-        self.set(HeaderName::from_static("Content-Type"), mime);
+        self.set(header::CONTENT_TYPE, mime);
         self
     }
 
@@ -131,20 +182,42 @@ impl Response {
 
         let mut builder = HyperResponse::builder();
 
-        {
-            let headers = std::mem::take(&mut self.headers);
-            for (k, v) in headers {
-                builder = builder.header(k.unwrap(), v);
-            }
-        }
+        let is_redirect = self.status.is_redirection();
+        let has_location = self.headers.contains_key(header::LOCATION);
 
-        let body = self.body.freeze();
+        let suppress_body = matches!(
+            self.status,
+            StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED
+        ) || self.status == StatusCode::NO_CONTENT;
+
+        let body = if suppress_body {
+            Bytes::new()
+        } else {
+            self.body.freeze()
+        };
 
         let status = if body.is_empty() && self.status == StatusCode::OK {
             StatusCode::NO_CONTENT
         } else {
             self.status
         };
+
+        if is_redirect && body.is_empty() && has_location {
+            self.headers
+                .insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+        }
+
+        for (key, value) in DEFAULT_HEADERS.iter() {
+            self.headers.entry(key.clone()).or_insert(value.clone());
+        }
+
+        for (k, v) in std::mem::take(&mut self.headers) {
+            if let Some(k) = k {
+                builder = builder.header(k, v);
+            } else {
+                eprintln!("Warning: skipping invalid header key");
+            }
+        }
 
         builder
             .status(status)
@@ -160,4 +233,21 @@ impl From<Response> for HyperResponse<Full<Bytes>> {
     fn from(resp: Response) -> Self {
         resp.into_hyper()
     }
+}
+
+#[inline]
+fn sanitize_header_value(input: &str) -> HeaderValue {
+    // Keep only visible ASCII (33 to 126)
+    let cleaned: String = input
+        .chars()
+        .filter(|&c| c.is_ascii_graphic() || c == ' ') // ' ' is optional, often allowed
+        .collect();
+
+    HeaderValue::from_str(&cleaned).unwrap_or_else(|_| {
+        eprintln!(
+            "HeaderValue sanitization failed: input '{}', sanitized '{}'",
+            input, cleaned
+        );
+        HeaderValue::from_static("/")
+    })
 }

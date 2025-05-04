@@ -1,17 +1,22 @@
-use crate::{
-    express::Next,
-    handler::{Handler, Request, Response},
-    methods::Method,
-};
+use super::route::Route;
+use crate::handler::{Handler, Next, Request, Response};
+use hyper::Method;
 use std::path::{Path, PathBuf};
 
-use super::route::Route;
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LayerKind {
+    Middleware,
+    #[default]
+    Route,
+    ExpressInit,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Layer {
     pub method: Option<Method>,
-    handle: Handler,
+    pub handle: Handler,
     pub route: Option<Route>,
+    pub kind: LayerKind,
     path: PathBuf,
 }
 
@@ -22,6 +27,19 @@ impl Layer {
             method: None,
             route: None,
             path: path.as_ref().to_path_buf(),
+            kind: LayerKind::default(),
+        }
+    }
+
+    pub fn match_path(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+
+        if let Some(route) = &self.route {
+            route.path == path
+        } else if self.path == path && self.kind == LayerKind::Middleware {
+            true
+        } else {
+            false
         }
     }
 
@@ -29,7 +47,7 @@ impl Layer {
         &mut self.route
     }
 
-    pub fn handle_request(&self, req: Request, res: &mut Response, next: Next) {
+    pub fn handle_request(&self, req: &Request, res: &mut Response, next: Next) {
         let f = self.handle.inner();
 
         f(req, res, next);

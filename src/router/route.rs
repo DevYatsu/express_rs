@@ -1,13 +1,16 @@
+use super::layer::Layer;
+use crate::handler::Handler;
+use hyper::Method;
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct Route {
-    path: PathBuf,
+    pub path: PathBuf,
     pub stack: Vec<Layer>,
-    methods: HashMap<Method, bool>,
+    pub methods: HashSet<Method>,
 }
 
 impl Route {
@@ -15,14 +18,10 @@ impl Route {
         Self {
             path: path.as_ref().to_path_buf(),
             stack: Vec::new(),
-            methods: HashMap::new(),
+            methods: HashSet::new(),
         }
     }
 }
-
-use super::layer::Layer;
-use crate::{handler::Handler, methods::Method};
-use std::str::FromStr;
 
 macro_rules! generate_methods {
     (
@@ -31,12 +30,13 @@ macro_rules! generate_methods {
         impl Route {
             $(
                 pub fn $method(&mut self, handler: impl Into<Handler>) -> &mut Self {
+                    use std::str::FromStr;
                     use super::Layer;
                     let mut layer = Layer::new("/", handler);
-                    let method = Method::from_str(stringify!($method)).expect("This method is not a valid Method");
-                    layer.method = Some(method);
+                    let method = Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method");
+                    layer.method = Some(method.clone());
 
-                    self.methods.insert(method, true);
+                    self.methods.insert(method);
                     self.stack.push(layer);
 
                     self
