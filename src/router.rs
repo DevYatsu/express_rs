@@ -20,6 +20,8 @@ pub struct Router {
     pub middleware_matcher: MatchitRouter<Vec<usize>>,
 }
 
+// TODO next take care of handling/storing/accessing search params
+
 impl Router {
     pub fn route(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Route {
         if let Ok(entry) = self.route_matcher.at_mut(path.as_ref()) {
@@ -55,6 +57,8 @@ impl Router {
     }
 
     pub fn handle(&self, req: &Request, res: &mut Response) {
+        // TODO! handle middleware matches so that all middlewares that match the path (for example /test and /:slug) both get called
+
         // gather matched middlewares
         let mut matched = self
             .middleware_matcher
