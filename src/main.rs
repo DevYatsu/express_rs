@@ -14,7 +14,9 @@ async fn main() {
     let mut app = app();
     const PORT: u16 = 8080;
 
-    app.use_with(StaticServeMiddleware("/src"));
+    app.use_with(StaticServeMiddleware("src"));
+    app.use_with(StaticServeMiddleware("/target"));
+    app.use_with(StaticServeMiddleware("/expressjs_tests"));
 
     app.get("/", |_req: &Request, res: &mut Response, _| {
         let html = r#"
@@ -83,7 +85,7 @@ async fn main() {
         res.write("!").end();
     });
 
-    println!("{:?}", app.router.as_ref().unwrap().matcher);
+    println!("{:?}", app.router.as_ref().unwrap().middleware_matcher);
 
     app.listen(PORT, || println!("Server listening on port {}", PORT))
         .await

@@ -1,67 +1,53 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    sync::{Arc, RwLock},
-};
-
-use bytes::Bytes;
-use hyper::header::{CACHE_CONTROL, HeaderValue};
-use once_cell::sync::Lazy;
-
 use crate::{
     handler::{Handler, Next, Request, Response},
     router::Middleware,
 };
+use bytes::Bytes;
+use lru::LruCache;
+use once_cell::sync::Lazy;
+use std::num::NonZeroUsize;
+use std::{
+    fs,
+    sync::{Arc, Mutex},
+};
 
-// Global file cache: maps path -> content
-static FILE_CACHE: Lazy<RwLock<HashMap<String, Arc<Bytes>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+// Global file cache with LRU eviction
+static FILE_CACHE: Lazy<Mutex<LruCache<String, Arc<Bytes>>>> =
+    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 #[derive(Debug, Clone)]
-pub struct StaticServeMiddleware<P: AsRef<Path>>(pub P);
+pub struct StaticServeMiddleware(pub &'static str);
 
-impl<P: AsRef<Path> + Send + Sync> Middleware for StaticServeMiddleware<P> {
+impl Middleware for StaticServeMiddleware {
     fn target_path(&self) -> impl Into<String> {
-        "*"
+        format!("/{}/{{*p}}", self.0.trim_start_matches('/'))
     }
 
     fn create_handler(&self) -> Handler {
-        let base_path = self.0.as_ref().to_path_buf();
-
-        Handler::from(move |req: &Request, res: &mut Response, next: Next| {
+        Handler::new(move |req: &Request, res: &mut Response, next: Next| {
             let uri_path = req.uri().path();
+            let file_path = format!(".{}", uri_path);
 
-            res.set(
-                CACHE_CONTROL,
-                HeaderValue::from_static("no-store, no-cache, must-revalidate, proxy-revalidate"),
-            );
-
-            // Prevent directory traversal (e.g., "..")
-            if !uri_path.starts_with(&*base_path.to_string_lossy()) {
-                return next();
+            // Check cache
+            if let Some(cached) = FILE_CACHE.lock().unwrap().get(&file_path) {
+                res.send(cached.as_ref());
+                return;
             }
 
-            let full_path = format!(".{}", uri_path);
+            // Attempt to read and maybe cache
+            match fs::read(&file_path) {
+                Ok(data) => {
+                    let len = data.len();
+                    let arc_bytes = Arc::new(Bytes::from(data));
 
-            // Check the cache first
-            {
-                let cache = FILE_CACHE.read().unwrap();
-                if let Some(cached) = cache.get(&full_path) {
-                    res.send(cached.as_ref());
-                    return;
-                }
-            }
+                    if len < 512 * 1024 {
+                        FILE_CACHE
+                            .lock()
+                            .unwrap()
+                            .put(file_path.clone(), arc_bytes.clone());
+                    }
 
-            // Read the file and cache it
-            match fs::read(&full_path) {
-                Ok(content) => {
-                    let bytes = Arc::new(Bytes::from(content));
-                    FILE_CACHE
-                        .write()
-                        .unwrap()
-                        .insert(full_path.clone(), bytes.clone());
-                    res.send(bytes.as_ref());
+                    res.send(arc_bytes.as_ref());
                 }
                 Err(_) => next(),
             }

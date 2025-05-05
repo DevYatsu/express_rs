@@ -12,6 +12,7 @@ use hyper::{
     },
 };
 use itoa::Buffer;
+use lru::LruCache;
 use memmap2::Mmap;
 use mime_guess;
 use once_cell::sync::Lazy;
@@ -20,13 +21,14 @@ use std::{
     fmt::Debug,
     fs::{self, File},
     io::ErrorKind,
+    num::NonZeroUsize,
     pin::Pin,
     str::FromStr,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
 
-static FILE_CACHE: Lazy<RwLock<HashMap<String, Arc<Bytes>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static FILE_CACHE: Lazy<Mutex<LruCache<String, Arc<Bytes>>>> =
+    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 #[derive(Default)]
 pub struct Response {
@@ -175,10 +177,9 @@ impl Response {
     ///
     /// In all cases, the file is cached for future requests, and the correct `Content-Type` is inferred using the file extension.
     pub fn send_file(&mut self, path: &str) -> &mut Self {
-        {
-            if let Some(cached) = FILE_CACHE.read().unwrap().get(path) {
-                return self.send(cached.as_ref());
-            }
+        // Check cache
+        if let Some(cached) = FILE_CACHE.lock().unwrap().get(path) {
+            return self.send(cached.as_ref());
         }
 
         match File::open(path) {
@@ -221,10 +222,12 @@ impl Response {
                 match fs::read(path) {
                     Ok(data) => {
                         let bytes = Arc::new(Bytes::from(data));
+
                         FILE_CACHE
-                            .write()
+                            .lock()
                             .unwrap()
-                            .insert(path.to_string(), bytes.clone());
+                            .put(path.to_string(), bytes.clone());
+
                         self.status(StatusCode::OK);
                         self.set(
                             header::CONTENT_TYPE,

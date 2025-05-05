@@ -16,7 +16,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn handle(&self, req: ExpressRequest, res: &mut ExpressResponse) {
+    pub fn handle(&self, req: &ExpressRequest, res: &mut ExpressResponse) {
         self.router.as_ref().unwrap().handle(req, res);
     }
 
@@ -73,7 +73,7 @@ impl Service<Request<Incoming>> for App {
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
         let mut response_builder = ExpressResponse::default();
-        self.handle(req, &mut response_builder);
+        self.handle(&req, &mut response_builder);
 
         let response = response_builder.into_hyper_streaming();
 
