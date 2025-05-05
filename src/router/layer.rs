@@ -49,8 +49,6 @@ impl Layer {
     }
 
     pub fn handle_request(&self, req: &Request, res: &mut Response, next: Next) {
-        let f = self.handle.inner();
-
-        f(req, res, next);
+        self.handle.call(req, res, next)
     }
 }

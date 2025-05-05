@@ -69,7 +69,7 @@ impl Router {
 
         if matched.is_empty() {
             // No matching middleware -> fallback
-            res.status_code(404).send("Not Found");
+            res.status_code(404).unwrap().send("Not Found");
             return;
         }
 
@@ -112,7 +112,7 @@ impl Router {
 
         // matching path but not method
         if !path_method_matched {
-            res.status_code(405).send("Method Not Allowed");
+            res.status_code(405).unwrap().send("Method Not Allowed");
             return;
         }
     }

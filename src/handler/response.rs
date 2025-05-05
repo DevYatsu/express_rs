@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use error::ResponseError;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use http_body_util::{Full, StreamBody};
@@ -13,21 +14,22 @@ use hyper::{
 };
 use itoa::Buffer;
 use lru::LruCache;
-use memmap2::Mmap;
 use mime_guess;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
     fmt::Debug,
     fs::{self, File},
-    io::ErrorKind,
     num::NonZeroUsize,
+    path::Path,
     pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
 };
 
-static FILE_CACHE: Lazy<Mutex<LruCache<String, Arc<Bytes>>>> =
+pub mod error;
+
+static FILE_CACHE: Lazy<Mutex<LruCache<String, (String, Arc<Bytes>)>>> =
     Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 #[derive(Default)]
@@ -55,6 +57,12 @@ const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
 });
 
 impl Response {
+    //
+    //
+    // STATIC METHODS
+    //
+    //
+
     /// Creates a new `Response` with default headers and empty body.
     pub fn new() -> Self {
         Self {
@@ -65,6 +73,131 @@ impl Response {
             streaming: None,
         }
     }
+
+    /// 200 OK
+    pub fn ok() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::OK);
+        res
+    }
+
+    /// 201 Created
+    pub fn created() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::CREATED);
+        res
+    }
+
+    /// 204 No Content
+    pub fn no_content() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::NO_CONTENT);
+        res
+    }
+
+    /// 301 Moved Permanently
+    pub fn moved_permanently(location: &str) -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::MOVED_PERMANENTLY).location(location);
+        res
+    }
+
+    /// 302 Found (temporary redirect)
+    pub fn found(location: &str) -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::FOUND).location(location);
+        res
+    }
+
+    /// 400 Bad Request
+    pub fn bad_request() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::BAD_REQUEST);
+        res
+    }
+
+    /// 401 Unauthorized
+    pub fn unauthorized() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::UNAUTHORIZED);
+        res
+    }
+
+    /// 403 Forbidden
+    pub fn forbidden() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::FORBIDDEN);
+        res
+    }
+
+    /// 404 Not Found
+    pub fn not_found() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::NOT_FOUND);
+        res
+    }
+
+    /// 405 Method Not Allowed
+    pub fn method_not_allowed() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::METHOD_NOT_ALLOWED);
+        res
+    }
+
+    /// 413 Payload Too Large
+    pub fn payload_too_large() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::PAYLOAD_TOO_LARGE);
+        res
+    }
+
+    /// 415 Unsupported Media Type
+    pub fn unsupported_media_type() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        res
+    }
+
+    /// 500 Internal Server Error
+    pub fn internal_error() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::INTERNAL_SERVER_ERROR);
+        res
+    }
+
+    /// 502 Bad Gateway
+    pub fn bad_gateway() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::BAD_GATEWAY);
+        res
+    }
+
+    /// 503 Service Unavailable
+    pub fn service_unavailable() -> Self {
+        let mut res = Self::new();
+        res.status(StatusCode::SERVICE_UNAVAILABLE);
+        res
+    }
+
+    /// Create with any status
+    pub fn with_status(status: StatusCode) -> Self {
+        let mut res = Self::new();
+        res.status(status);
+        res
+    }
+
+    /// Creates a response with a custom status and body message.
+    pub fn with_status_and_message(status: StatusCode, message: &'static str) -> Self {
+        let mut res = Response::new();
+        res.status(status).send(message);
+        res
+    }
+
+    //
+    //
+    // BUILDER METHODS
+    //
+    //
 
     /// Returns `true` if the response has been marked as ended.
     pub fn is_ended(&self) -> bool {
@@ -82,25 +215,28 @@ impl Response {
         self
     }
 
-    /// Sets the HTTP status code from a `u16`.
+    /// Attempts to set the HTTP status code from a `u16` value.
     ///
-    /// ### Panics
-    /// Panics if the u16 status is not a valid status (must be >100 and <1000)
-    pub fn status_code(&mut self, status: u16) -> &mut Self {
-        self.status = StatusCode::from_u16(status).expect("Expected valid status code");
-        self
+    /// Returns an error if the provided code is not a valid HTTP status code
+    /// (e.g., not between 100 and 599).
+    pub fn status_code(&mut self, status: u16) -> Result<&mut Self, ResponseError> {
+        self.status =
+            StatusCode::from_u16(status).map_err(|_| ResponseError::InvalidStatusCode(status))?;
+        Ok(self)
     }
 
     /// Returns the canonical reason phrase for the current status code.
-    pub fn status_text(&self) -> &'static str {
-        self.status.canonical_reason().unwrap_or("Unknown")
+    pub fn status_text(&self) -> Option<&'static str> {
+        self.status.canonical_reason()
     }
 
     /// Sets the status and sends the corresponding reason as body text.
-    pub fn send_status(&mut self, code: u16) -> &mut Self {
-        self.status_code(code);
-        let message = self.status_text();
-        self.r#type("text/plain; charset=utf-8").send(message)
+    pub fn send_status(&mut self, code: u16) -> Result<&mut Self, ResponseError> {
+        self.status_code(code)?;
+        let message = self.status_text().unwrap();
+        self.r#type("text/plain; charset=utf-8").send(message);
+
+        Ok(self)
     }
 
     /// Sets the `Content-Length` header.
@@ -133,7 +269,7 @@ impl Response {
     }
 
     /// Clears and sets the body, updates headers, and ends the response.
-    pub fn send(&mut self, data: impl AsRef<[u8]>) -> &mut Self {
+    pub fn send(&mut self, data: impl AsRef<[u8]>) -> () {
         let data = data.as_ref();
         self.body.clear();
         self.body.reserve(data.len());
@@ -147,6 +283,12 @@ impl Response {
         );
 
         if self.headers.get(CONTENT_TYPE).is_none() {
+            let mime = Self::infer(data);
+
+            self.r#type(mime);
+        }
+
+        if self.headers.get(CONTENT_TYPE).is_none() {
             self.r#type(if std::str::from_utf8(data).is_ok() {
                 "text/plain; charset=utf-8"
             } else {
@@ -157,146 +299,108 @@ impl Response {
         self.end()
     }
 
-    /// Sends a JSON response with appropriate content type.
-    pub fn json<T: serde::Serialize>(&mut self, value: T) -> &mut Self {
-        let json = serde_json::to_vec(&value).expect("Failed to serialize JSON");
+    /// Serializes a value to JSON and sends it as the response body.
+    ///
+    /// Returns an error if the value fails to serialize.
+    /// Automatically sets the `Content-Type` to `application/json`.
+    pub fn json<T: ?Sized + serde::Serialize>(&mut self, value: &T) -> Result<(), ResponseError> {
+        let json = serde_json::to_vec(&value)?;
         self.set(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.send(json)
+        Ok(self.send(json))
     }
 
-    /// Sends a file from disk to the client.  
+    /// Sends a file from disk to the client.
     ///
-    /// If the file has already been cached in memory (based on path), it is served directly from the cache.
-    /// Otherwise, the file is read from disk.  
+    /// Returns an error if the file cannot be read, memory-mapped (if large),
+    /// or if header insertion fails. Content type is inferred from the file extension.
     ///
     /// For performance optimization, if the file size exceeds 512 KB, it attempts to use memory-mapped I/O
     /// via the `memmap2` crate to avoid extra allocations and reduce read overhead.
     ///
     /// ⚠️ This function uses `unsafe` internally when invoking `memmap2::Mmap::map`, as required by the API.  
     /// The memory-mapped content is copied into an owned buffer (`Bytes`) before being cached and sent, which ensures safety.
-    ///
-    /// In all cases, the file is cached for future requests, and the correct `Content-Type` is inferred using the file extension.
-    pub fn send_file(&mut self, path: &str) -> &mut Self {
+    pub fn send_file(&mut self, path: &str) -> Result<(), ResponseError> {
         // Check cache
-        if let Some(cached) = FILE_CACHE.lock().unwrap().get(path) {
-            return self.send(cached.as_ref());
+        if let Some((mime, cached)) = FILE_CACHE.lock().unwrap().get(path) {
+            self.r#type(mime);
+            return Ok(self.send(cached.as_ref()));
         }
 
-        match File::open(path) {
-            Ok(file) => {
-                let metadata = match file.metadata() {
-                    Ok(m) => m,
-                    Err(_) => {
-                        return self
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .send("Failed to read metadata");
-                    }
-                };
+        let file = File::open(path)?;
+        let metadata = file.metadata()?;
 
-                if metadata.len() > 512 * 1024 {
-                    // Use mmap for files > 512KB
-                    match unsafe { Mmap::map(&file) } {
-                        Ok(mmap) => {
-                            let bytes = Arc::new(Bytes::copy_from_slice(&mmap));
-                            self.status(StatusCode::OK);
-                            self.set(
-                                header::CONTENT_TYPE,
-                                HeaderValue::from_str(
-                                    mime_guess::from_path(path)
-                                        .first_or_octet_stream()
-                                        .essence_str(),
-                                )
-                                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-                            );
-                            return self.send(&*bytes);
-                        }
-                        Err(_) => {
-                            return self
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .send("Failed to mmap file");
-                        }
-                    }
-                }
+        let extension = Path::new(path).extension().and_then(|ext| ext.to_str());
+        if extension.is_some() {
+            self.r#type(extension.unwrap());
+        }
 
-                // Fallback: regular read
-                match fs::read(path) {
-                    Ok(data) => {
-                        let bytes = Arc::new(Bytes::from(data));
-
-                        FILE_CACHE
-                            .lock()
-                            .unwrap()
-                            .put(path.to_string(), bytes.clone());
-
+        if metadata.len() > 512 * 1024 {
+            unsafe {
+                match memmap2::Mmap::map(&file) {
+                    Ok(mmap) => {
+                        let bytes = Arc::new(Bytes::copy_from_slice(&mmap));
                         self.status(StatusCode::OK);
-                        self.set(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_str(
-                                mime_guess::from_path(path)
-                                    .first_or_octet_stream()
-                                    .essence_str(),
-                            )
-                            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-                        );
-                        self.send(&*bytes)
+                        return Ok(self.send(&*bytes));
                     }
-                    Err(e) if e.kind() == ErrorKind::NotFound => {
-                        self.status(StatusCode::NOT_FOUND).send("File not found")
-                    }
-                    Err(_) => self
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .send("Failed to read file"),
+                    Err(_) => return Err(ResponseError::MmapError),
                 }
             }
-            Err(_) => self.status(StatusCode::NOT_FOUND).send("File not found"),
         }
+
+        let data = fs::read(path)?;
+        let bytes = Arc::new(Bytes::from(data));
+
+        let mime = if extension.is_some() {
+            extension.unwrap()
+        } else {
+            Self::infer(&bytes)
+        };
+
+        FILE_CACHE
+            .lock()
+            .unwrap()
+            .put(path.to_string(), (mime.to_owned(), bytes.clone()));
+
+        self.status(StatusCode::OK);
+        Ok(self.send(&*bytes))
     }
 
-    /// Streams a custom body.
-    pub fn stream<S>(&mut self, stream: S) -> &mut Self
+    /// Sets a streaming response body from a `Stream`.
+    ///
+    /// Returns an error if headers cannot be set.
+    /// The stream must yield `Bytes` or `hyper::Error` values.
+    pub fn stream<S>(&mut self, stream: S) -> Result<&mut Self, ResponseError>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+        S: Stream<Item = Result<Bytes, hyper::Error>> + Send + 'static,
     {
-        self.prepare_stream(stream, "application/octet-stream");
-        self
-    }
-
-    /// Internal helper for stream setup.
-    fn prepare_stream<S>(&mut self, stream: S, mime: &str)
-    where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
-    {
-        let wrapped_stream = stream.map(|r| {
-            match r {
-                Ok(bytes) => Ok(Frame::data(bytes)),
-                Err(e) => {
-                    eprintln!("Stream error: {}", e);
-                    panic!("Streaming error occurred"); // You could also return a fallback here
-                }
-            }
+        let wrapped_stream = stream.map(|r| match r {
+            Ok(bytes) => Ok(Frame::data(bytes)),
+            Err(e) => Err(e),
         });
 
         let stream_body = StreamBody::new(wrapped_stream);
 
         self.status = StatusCode::OK;
         self.ended = true;
-        self.body.clear();
+        self.body = BytesMut::new();
+
         self.headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_str(mime)
+            CONTENT_TYPE,
+            HeaderValue::from_str(Self::infer(&self.body))
                 .unwrap_or(HeaderValue::from_static("application/octet-stream")),
         );
+
         self.streaming = Some(Box::pin(stream_body));
+        Ok(self)
     }
 
     /// Marks the response as ended.
-    pub fn end(&mut self) -> &mut Self {
+    pub fn end(&mut self) -> () {
         self.ended = true;
-        self
     }
 
     /// Sends a redirect response to the given location.
-    pub fn redirect(&mut self, location: impl AsRef<str>) -> &mut Self {
+    pub fn redirect(&mut self, location: impl AsRef<str>) -> () {
         self.status = StatusCode::FOUND; // Default 302
         self.location(location);
         self.end()
@@ -467,6 +571,18 @@ impl Response {
             .body(body)
             .unwrap_or_else(|_| build_error_response())
     }
+
+    fn infer(data: &[u8]) -> &str {
+        let mime = if let Some(kind) = infer::get(data) {
+            kind.mime_type()
+        } else if std::str::from_utf8(data).is_ok() {
+            "text/plain; charset=utf-8"
+        } else {
+            "application/octet-stream"
+        };
+
+        mime
+    }
 }
 
 impl From<Response> for HyperResponse<Full<Bytes>> {
@@ -492,5 +608,26 @@ impl Debug for Response {
             .field("headers", &self.headers)
             .field("ended", &self.ended)
             .finish()
+    }
+}
+
+impl From<ResponseError> for HyperResponse<String> {
+    fn from(err: ResponseError) -> Self {
+        let status = match err {
+            ResponseError::InvalidStatusCode(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ResponseError::JsonSerializationError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ResponseError::InvalidHeaderValue(_) => StatusCode::BAD_REQUEST,
+            ResponseError::FileOpenError(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                StatusCode::NOT_FOUND
+            }
+            ResponseError::FileOpenError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ResponseError::MmapError => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        HyperResponse::builder()
+            .status(status)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(err.to_string())
+            .unwrap()
     }
 }

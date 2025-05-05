@@ -15,8 +15,8 @@ async fn main() {
     const PORT: u16 = 8080;
 
     app.use_with(StaticServeMiddleware("src"));
-    app.use_with(StaticServeMiddleware("/target"));
-    app.use_with(StaticServeMiddleware("/expressjs_tests"));
+    app.use_with(StaticServeMiddleware("css"));
+    app.use_with(StaticServeMiddleware("expressjs_tests"));
 
     app.get("/", |_req: &Request, res: &mut Response, _| {
         let html = r#"
@@ -26,10 +26,7 @@ async fn main() {
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Welcome</title>
-                <style>
-                    body { font-family: sans-serif; background: #f0f0f0; padding: 2em; }
-                    h1 { color: #333; }
-                </style>
+                <link rel="stylesheet" href="/css/index.css"/>
             </head>
             <body>
                 <h1>Welcome to express_rs</h1>
@@ -45,16 +42,18 @@ async fn main() {
         "#;
 
         res.status_code(200)
+            .unwrap()
             .r#type("text/html; charset=utf-8")
             .send(html);
     });
 
     app.get("/json", |_req: &Request, res: &mut Response, _| {
-        res.json(json!({
+        res.json(&json!({
             "message": "Hello from JSON!",
             "status": "success",
             "version": "1.0"
-        }));
+        }))
+        .unwrap();
     });
 
     app.get("/redirect", |_req: &Request, res: &mut Response, _| {
@@ -66,7 +65,11 @@ async fn main() {
     });
 
     app.get("/file", |_req: &Request, res: &mut Response, _| {
-        res.send_file("./Cargo.lock");
+        res.send_file("./Cargo.lock")
+            .map_err(|_| {
+                *res = Response::internal_error();
+            })
+            .unwrap();
     });
 
     app.get(

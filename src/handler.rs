@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 mod next;
 mod request;
-mod response;
+pub mod response;
 
 pub use next::Next;
 pub use request::Request;
@@ -16,12 +16,15 @@ pub struct Handler {
 }
 
 impl Handler {
-    pub fn new(f: impl Fn(&Request, &mut Response, Next) + Send + Sync + 'static) -> Self {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(&Request, &mut Response, Next) + Send + Sync + 'static,
+    {
         Self { inner: Arc::new(f) }
     }
 
-    pub fn inner(&self) -> &(dyn Fn(&Request, &mut Response, Next) + Send + Sync) {
-        &*self.inner
+    pub fn call(&self, req: &Request, res: &mut Response, next: Next) {
+        (self.inner)(req, res, next)
     }
 }
 
@@ -29,16 +32,14 @@ impl<F> From<F> for Handler
 where
     F: Fn(&Request, &mut Response, Next) + Send + Sync + 'static,
 {
-    fn from(value: F) -> Self {
-        Handler::new(value)
+    fn from(f: F) -> Self {
+        Handler { inner: Arc::new(f) }
     }
 }
 
 impl Default for Handler {
     fn default() -> Self {
-        Self {
-            inner: Arc::new(|_, _, _| {}),
-        }
+        (|_: &Request, _: &mut Response, _: Next| {}).into()
     }
 }
 
