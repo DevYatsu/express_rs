@@ -36,7 +36,9 @@ impl Layer {
 
         if let Some(route) = &self.route {
             route.path == path
-        } else if self.path == path && self.kind == LayerKind::Middleware {
+        } else if (self.path == Path::new("*") && self.kind == LayerKind::Middleware)
+            || (self.path == path && self.kind == LayerKind::Middleware)
+        {
             true
         } else {
             false

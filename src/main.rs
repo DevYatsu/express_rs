@@ -1,37 +1,20 @@
 use express_rs::{
     app,
-    handler::{Handler, Next, Request, Response},
-    router::Middleware,
+    express::StaticServeMiddleware,
+    handler::{Request, Response},
 };
 use hyper::{
     StatusCode,
     header::{self, HeaderValue},
 };
 use serde_json::json;
-use std::path::Path;
-
-#[derive(Debug, Clone, Default)]
-pub struct BaseMiddleware<T: AsRef<Path>>(pub T);
-
-impl<T: AsRef<Path>> Middleware for BaseMiddleware<T> {
-    fn path(&self) -> impl AsRef<Path> {
-        &self.0
-    }
-
-    fn new() -> Handler {
-        Handler::new(|_req: &Request, res: &mut Response, next: Next| {
-            res.write("!!!!");
-            next()
-        })
-    }
-}
 
 #[tokio::main]
 async fn main() {
     let mut app = app();
     const PORT: u16 = 8080;
 
-    app.use_with(BaseMiddleware("/hello"));
+    app.use_with(StaticServeMiddleware("/src"));
 
     app.get("/", |_req: &Request, res: &mut Response, _| {
         let html = r#"
