@@ -1,22 +1,19 @@
 use super::layer::Layer;
 use crate::handler::Handler;
 use hyper::Method;
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Default)]
 pub struct Route {
-    pub path: PathBuf,
+    pub path: String,
     pub stack: Vec<Layer>,
     pub methods: HashSet<Method>,
 }
 
 impl Route {
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn new(path: impl Into<String>) -> Self {
         Self {
-            path: path.as_ref().to_path_buf(),
+            path: path.into(),
             stack: Vec::new(),
             methods: HashSet::new(),
         }

@@ -1,12 +1,10 @@
 use crate::handler::{Handler, Next, Request, Response};
 use layer::Layer;
+use matchit::Router as MatchitRouter;
 use route::Route;
-use std::{
-    path::Path,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 mod layer;
@@ -18,12 +16,21 @@ pub use middleware::Middleware;
 #[derive(Debug, Clone, Default)]
 pub struct Router {
     stack: Vec<Layer>,
+    pub matcher: MatchitRouter<Vec<usize>>,
 }
 
 impl Router {
-    pub fn route(&mut self, path: impl AsRef<Path>, handle: impl Into<Handler>) -> &mut Route {
-        let route = Route::new(&path);
-        let mut layer = Layer::new(&path, handle);
+    pub fn route(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Route {
+        if let Ok(entry) = self.matcher.at_mut(path.as_ref()) {
+            entry.value.push(self.stack.len());
+        } else {
+            self.matcher
+                .insert(path.as_ref(), vec![self.stack.len()])
+                .unwrap();
+        }
+
+        let route = Route::new(path.as_ref());
+        let mut layer = Layer::new(path.as_ref(), handle);
         *layer.route_mut() = Some(route.clone());
         self.stack.push(layer);
         self.stack.last_mut().unwrap().route_mut().as_mut().unwrap()
@@ -38,43 +45,31 @@ impl Router {
     }
 
     pub fn handle(&self, req: Request, res: &mut Response) {
-        let stack = Arc::new(self.stack.clone());
-        let req = Arc::new(req);
-        let res = Arc::new(Mutex::new(res));
-        let index = Arc::new(AtomicUsize::new(0));
-
-        Self::dispatch(stack, index, req, res);
-    }
-
-    fn dispatch(
-        stack: Arc<Vec<Layer>>,
-        index: Arc<AtomicUsize>,
-        req: Arc<Request>,
-        res: Arc<Mutex<&mut Response>>,
-    ) {
-        while let Some(i) = Self::next_index(&index, stack.len()) {
-            let layer = &stack[i];
-
-            if !layer.match_path(req.uri().path()) {
-                continue;
+        let matched = match self.matcher.at(req.uri().path()) {
+            Ok(m) => m.value,
+            Err(_) => {
+                res.status_code(404).send("Not Found");
+                return;
             }
+        };
 
-            let called_next = Arc::new(AtomicBool::new(false));
-            let next_signal = {
-                let called_next = Arc::clone(&called_next);
-                Box::new(move || {
-                    called_next.store(true, Ordering::SeqCst);
-                }) as Next
-            };
+        if matched.is_empty() {
+            // No matching middleware -> fallback
+            res.status_code(404).send("Not Found");
+            return;
+        }
 
-            if layer.match_path(req.uri().path()) && layer.route.is_none() {
+        let mut path_method_matched = false;
+
+        for layer in matched.iter().map(|i| self.stack.get(*i).unwrap()) {
+            if layer.route.is_none() {
+                let (called_next, next_signal) = Self::create_next();
+
                 // middleware matching route
-                if let Ok(mut res_guard) = res.lock() {
-                    layer.handle_request(&req, &mut *res_guard, next_signal);
-                }
+                layer.handle_request(&req, res, next_signal);
 
                 // If `next` was not called, stop processing
-                if !called_next.load(Ordering::SeqCst) {
+                if !called_next.load(Ordering::Relaxed) {
                     return;
                 }
 
@@ -87,26 +82,35 @@ impl Router {
                 continue;
             }
 
-            if let Ok(mut res_guard) = res.lock() {
-                route.stack[0].handle_request(&req, &mut *res_guard, next_signal);
-            }
+            path_method_matched = true;
 
-            if !called_next.load(Ordering::Acquire) {
-                return;
+            for route_layer in &route.stack {
+                let (called_next, next_signal) = Self::create_next();
+
+                route_layer.handle_request(&req, res, next_signal);
+
+                if !called_next.load(Ordering::Relaxed) {
+                    return;
+                }
             }
         }
 
-        // No matching middleware -> fallback
-        if let Ok(mut res_guard) = res.lock() {
-            if !res_guard.is_ended() {
-                res_guard.status_code(404).send("Not Found");
-            }
+        if !path_method_matched {
+            // matching path but not method
+            res.status_code(405).send("Method Not Allowed");
+            return;
         }
     }
 
-    #[inline]
-    fn next_index(index: &AtomicUsize, max: usize) -> Option<usize> {
-        let i = index.fetch_add(1, Ordering::SeqCst);
-        if i < max { Some(i) } else { None }
+    fn create_next() -> (Arc<AtomicBool>, Next) {
+        let called_next = Arc::new(AtomicBool::new(false));
+        let next_signal = Box::new({
+            let called_next = Arc::clone(&called_next);
+            move || {
+                called_next.store(true, Ordering::Relaxed);
+            }
+        });
+
+        (called_next, next_signal)
     }
 }

@@ -90,6 +90,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
+ "matchit",
  "memmap2",
  "mime_guess",
  "once_cell",
@@ -456,6 +457,12 @@ dependencies = [
  "autocfg",
  "scopeguard",
 ]
+
+[[package]]
+name = "matchit"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f926ade0c4e170215ae43342bf13b9310a437609c81f29f86c5df6657582ef9"
 
 [[package]]
 name = "memchr"

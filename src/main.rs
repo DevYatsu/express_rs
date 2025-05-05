@@ -1,7 +1,7 @@
 use express_rs::{
     app,
     express::StaticServeMiddleware,
-    handler::{Request, Response},
+    handler::{Next, Request, Response},
 };
 use hyper::{
     StatusCode,
@@ -69,7 +69,7 @@ async fn main() {
 
     app.get(
         "/hello",
-        |_req: &Request, res: &mut Response, next: Box<dyn FnOnce() + Send>| {
+        |_req: &Request, res: &mut Response, next: Next| {
             res.write("Hello, world").set(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=86400"),
@@ -82,6 +82,8 @@ async fn main() {
     app.get("/hello", |_req: &Request, res: &mut Response, _| {
         res.write("!").end();
     });
+
+    println!("{:?}", app.router.as_ref().unwrap().matcher);
 
     app.listen(PORT, || println!("Server listening on port {}", PORT))
         .await

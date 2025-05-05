@@ -82,7 +82,6 @@ impl Service<Request<Incoming>> for App {
 }
 
 use crate::handler::Handler;
-use std::path::Path;
 
 macro_rules! generate_methods {
     (
@@ -90,7 +89,7 @@ macro_rules! generate_methods {
     ) => {
         impl App {
             $(
-                pub fn $method(&mut self, path: impl AsRef<Path>, handle: impl Into<Handler>) -> &mut Self {
+                pub fn $method(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Self {
                     self.lazyrouter();
                     let handler = handle.into();
                     let route = self.router.as_mut().unwrap().route(path, handler.clone());
