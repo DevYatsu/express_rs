@@ -37,6 +37,7 @@ impl Router {
     }
 
     pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
+        // TODO! need to research how to handle matcher for middlewares
         let mut layer = Layer::new(middleware.target_path(), middleware.create_handler());
         layer.kind = M::layer_kind();
         self.stack.push(layer);
