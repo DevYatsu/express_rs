@@ -100,7 +100,6 @@ macro_rules! generate_methods {
                         println!("route: {:?}", route);
                     }
 
-
                     self
                 }
             )*

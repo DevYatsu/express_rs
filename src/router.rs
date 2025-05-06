@@ -1,6 +1,7 @@
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
 use layer::Layer;
 use matchit::Router as MatchitRouter;
+use middleware::MiddlewareRouter;
 use route::Route;
 use std::{
     collections::HashMap,
@@ -19,7 +20,8 @@ pub use middleware::Middleware;
 #[derive(Debug, Clone, Default)]
 pub struct Router {
     stack: Vec<Layer>,
-    pub route_matcher: MatchitRouter<Vec<usize>>,
+    route_matcher: MatchitRouter<Vec<usize>>,
+//    pub middleware_matcher: MatchitRouter<Vec<usize>>,
     pub middleware_matcher: MatchitRouter<Vec<usize>>,
 }
 
@@ -42,6 +44,10 @@ impl Router {
 
     pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
         let path = &middleware.target_path().into();
+
+        let mut r = MiddlewareRouter::new();
+        r.insert(path, self.stack.len()).unwrap();
+
         if let Ok(entry) = self.middleware_matcher.at_mut(path) {
             entry.value.push(self.stack.len());
         } else {
@@ -144,4 +150,9 @@ impl Router {
 
         (called_next, next_signal)
     }
+}
+
+pub trait Find {
+    fn find(&self);
+    fn find_all(&self);
 }

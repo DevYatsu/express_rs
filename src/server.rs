@@ -3,11 +3,11 @@ use hyper::server::conn::http1;
 use hyper::service::Service;
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
-use log::error;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use tokio::net::TcpListener;
+use tokio::signal;
 
 use crate::handler::response::error::ResponseError;
 
@@ -30,16 +30,29 @@ impl Server {
     {
         let listener = TcpListener::bind(addr).await?;
 
-        loop {
-            let (stream, _) = listener.accept().await?;
-            let service = make_service();
-            let io = TokioIo::new(stream);
+        let mut shutdown = tokio::spawn(async {
+            signal::ctrl_c().await.expect("failed to listen for ctrl_c");
+            log::info!("🛑 Received Ctrl+C, shutting down server...");
+        });
 
-            tokio::spawn(async move {
-                if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                    error!("Connection error: {}", err);
+        loop {
+            tokio::select! {
+                Ok((stream, _)) = listener.accept() => {
+                    let service = make_service();
+                    let io = TokioIo::new(stream);
+
+                    tokio::spawn(async move {
+                        if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                            log::error!("Connection error: {}", err);
+                        }
+                    });
                 }
-            });
+                _ = &mut shutdown => {
+                    break;
+                }
+            }
         }
+
+        Ok(())
     }
 }
