@@ -1,3 +1,4 @@
+use crate::handler::response::error::ResponseError;
 use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
 use crate::router::{Middleware, Router};
 use crate::server::Server;
@@ -16,7 +17,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn handle(&self, req: &ExpressRequest, res: &mut ExpressResponse) {
+    pub fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
         self.router.as_ref().unwrap().handle(req, res);
     }
 
@@ -36,7 +37,7 @@ impl App {
     pub async fn listen<T: FnOnce()>(self, port: u16, callback: T) {
         use hyper::service::service_fn;
 
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
 
         let app = std::sync::Arc::new(self);
 
@@ -67,15 +68,15 @@ use hyper::service::Service;
 use hyper::{Request, Response};
 
 impl Service<Request<Incoming>> for App {
-    type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>>;
+    type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>;
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn call(&self, req: Request<Incoming>) -> Self::Future {
+    fn call(&self, mut req: Request<Incoming>) -> Self::Future {
         let mut response_builder = ExpressResponse::default();
-        self.handle(&req, &mut response_builder);
+        self.handle(&mut req, &mut response_builder);
 
-        let response = response_builder.into_hyper_streaming();
+        let response = response_builder.into_hyper();
 
         Box::pin(async move { Ok(response) })
     }

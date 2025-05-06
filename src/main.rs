@@ -1,18 +1,22 @@
 use express_rs::{
     app,
     express::StaticServeMiddleware,
-    handler::{Next, Request, Response},
+    handler::{Next, Request, Response, request::RequestExt},
 };
 use hyper::{
     StatusCode,
     header::{self, HeaderValue},
 };
+use local_ip_address::local_ip;
+use log::info;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() {
-    let mut app = app();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     const PORT: u16 = 8080;
+    let mut app = app();
 
     app.use_with(StaticServeMiddleware("src"));
     app.use_with(StaticServeMiddleware("css"));
@@ -20,25 +24,25 @@ async fn main() {
 
     app.get("/", |_req: &Request, res: &mut Response, _| {
         let html = r#"
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Welcome</title>
-                <link rel="stylesheet" href="/css/index.css"/>
-            </head>
-            <body>
-                <h1>Welcome to express_rs</h1>
-                <p>This is a minimal HTML page served from Rust.</p>
-                <ul>
-                    <li><a href="/json">JSON Endpoint</a></li>
-                    <li><a href="/redirect">Redirect to Home</a></li>
-                    <li><a href="/status">Trigger 400</a></li>
-                    <li><a href="/hello">Say Hello</a></li>
-                </ul>
-            </body>
-            </html>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Welcome</title>
+            <link rel="stylesheet" href="/css/index.css"/>
+        </head>
+        <body>
+            <h1>Welcome to express_rs</h1>
+            <p>This is a minimal HTML page served from Rust.</p>
+            <ul>
+                <li><a href="/json">JSON Endpoint</a></li>
+                <li><a href="/redirect">Redirect to Home</a></li>
+                <li><a href="status">Trigger 400</a></li>
+                <li><a href="hello">Say Hello</a></li>
+            </ul>
+        </body>
+        </html>
         "#;
 
         res.status_code(200)
@@ -64,6 +68,10 @@ async fn main() {
         res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
     });
 
+    app.get("/status/{x}", |req: &Request, res: &mut Response, _| {
+        res.send(format!("Parameter is {}", req.params().get("x").unwrap()));
+    });
+
     app.get("/file", |_req: &Request, res: &mut Response, _| {
         res.send_file("./Cargo.lock")
             .map_err(|_| {
@@ -75,10 +83,12 @@ async fn main() {
     app.get(
         "/hello",
         |_req: &Request, res: &mut Response, next: Next| {
-            res.write("Hello, world").set(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=86400"),
-            );
+            res.write("Hello, world")
+                .set(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                )
+                .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
             next()
         },
@@ -90,6 +100,11 @@ async fn main() {
 
     println!("{:?}", app.router.as_ref().unwrap().middleware_matcher);
 
-    app.listen(PORT, || println!("Server listening on port {}", PORT))
-        .await
+    app.listen(PORT, || {
+        let local_ip = local_ip().unwrap();
+        info!("🚀 Server running!");
+        info!("📍 Local:   http://localhost:{PORT}/");
+        info!("🌐 Network: http://{local_ip}:{PORT}/");
+    })
+    .await
 }

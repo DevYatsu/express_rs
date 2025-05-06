@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use error::ResponseError;
 use futures_core::Stream;
 use futures_util::StreamExt;
-use http_body_util::{Full, StreamBody};
+use http_body_util::StreamBody;
 use hyper::{
     HeaderMap, Response as HyperResponse, StatusCode,
     body::{Body, Bytes, Frame},
@@ -38,7 +38,7 @@ pub struct Response {
     body: BytesMut,
     headers: HeaderMap,
     ended: bool,
-    streaming: Option<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>>,
+    streaming: Option<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>,
 }
 
 const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
@@ -314,11 +314,7 @@ impl Response {
     /// Returns an error if the file cannot be read, memory-mapped (if large),
     /// or if header insertion fails. Content type is inferred from the file extension.
     ///
-    /// For performance optimization, if the file size exceeds 512 KB, it attempts to use memory-mapped I/O
-    /// via the `memmap2` crate to avoid extra allocations and reduce read overhead.
-    ///
-    /// ⚠️ This function uses `unsafe` internally when invoking `memmap2::Mmap::map`, as required by the API.  
-    /// The memory-mapped content is copied into an owned buffer (`Bytes`) before being cached and sent, which ensures safety.
+    /// For performance optimization, if the file size exceeds 512 KB, it is streamed to the client
     pub fn send_file(&mut self, path: &str) -> Result<(), ResponseError> {
         // Check cache
         if let Some((mime, cached)) = FILE_CACHE.lock().unwrap().get(path) {
@@ -334,17 +330,14 @@ impl Response {
             self.r#type(extension.unwrap());
         }
 
+        // For large files, use a streaming response
         if metadata.len() > 512 * 1024 {
-            unsafe {
-                match memmap2::Mmap::map(&file) {
-                    Ok(mmap) => {
-                        let bytes = Arc::new(Bytes::copy_from_slice(&mmap));
-                        self.status(StatusCode::OK);
-                        return Ok(self.send(&*bytes));
-                    }
-                    Err(_) => return Err(ResponseError::MmapError),
-                }
-            }
+            let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file))
+                .map(|result| result.map(Bytes::from).map_err(|e| ResponseError::from(e)));
+
+            self.status(StatusCode::OK);
+            self.stream(stream)?;
+            return Ok(());
         }
 
         let data = fs::read(path)?;
@@ -368,10 +361,10 @@ impl Response {
     /// Sets a streaming response body from a `Stream`.
     ///
     /// Returns an error if headers cannot be set.
-    /// The stream must yield `Bytes` or `hyper::Error` values.
+    /// The stream must yield `Bytes` or `ResponseError` values.
     pub fn stream<S>(&mut self, stream: S) -> Result<&mut Self, ResponseError>
     where
-        S: Stream<Item = Result<Bytes, hyper::Error>> + Send + 'static,
+        S: Stream<Item = Result<Bytes, ResponseError>> + Send + 'static,
     {
         let wrapped_stream = stream.map(|r| match r {
             Ok(bytes) => Ok(Frame::data(bytes)),
@@ -465,69 +458,21 @@ impl Response {
         self
     }
 
-    /// Converts the response into a Hyper `Response<Full<Bytes>>`.
-    pub fn into_hyper(mut self) -> HyperResponse<Full<Bytes>> {
-        fn build_error_response() -> HyperResponse<Full<Bytes>> {
-            HyperResponse::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Full::new(Bytes::from_static(b"Internal Server Error")))
-                .unwrap()
-        }
-
-        if !self.ended {
-            self.end();
-        }
-
-        let mut builder = HyperResponse::builder();
-
-        let is_redirect = self.status.is_redirection();
-        let has_location = self.headers.contains_key(LOCATION);
-
-        let suppress_body = matches!(
-            self.status,
-            StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED
-        );
-
-        let body = if suppress_body {
-            Bytes::new()
-        } else {
-            self.body.freeze()
-        };
-
-        if is_redirect && body.is_empty() && has_location {
-            self.headers
-                .insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
-        }
-
-        for (key, value) in DEFAULT_HEADERS.iter() {
-            self.headers.entry(key.clone()).or_insert(value.clone());
-        }
-
-        for (k, v) in std::mem::take(&mut self.headers) {
-            if let Some(k) = k {
-                builder = builder.header(k, v);
-            }
-        }
-
-        builder
-            .status(self.status)
-            .body(Full::new(body))
-            .unwrap_or_else(|_| build_error_response())
-    }
-
     /// Converts the response into a streaming Hyper response.
-    pub fn into_hyper_streaming(
+    pub fn into_hyper(
         mut self,
-    ) -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>> {
+    ) -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>> {
         fn build_error_response()
-        -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>> {
+        -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>> {
             HyperResponse::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Box::pin(StreamBody::new(futures_util::stream::once(async {
-                    Ok::<_, hyper::Error>(Frame::data(Bytes::from_static(b"Internal Server Error")))
+                    Ok::<_, ResponseError>(Frame::data(Bytes::from_static(
+                        b"Internal Server Error",
+                    )))
                 })))
                     as Pin<
-                        Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>,
+                        Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>,
                     >)
                 .unwrap()
         }
@@ -556,13 +501,13 @@ impl Response {
         }
 
         let status = self.status;
-        let body: Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>> =
+        let body: Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>> =
             if let Some(stream) = self.streaming {
                 stream
             } else {
                 let frozen = self.body.freeze();
                 Box::pin(StreamBody::new(futures_util::stream::once(async {
-                    Ok::<_, hyper::Error>(Frame::data(frozen))
+                    Ok::<_, ResponseError>(Frame::data(frozen))
                 })))
             };
 
@@ -582,12 +527,6 @@ impl Response {
         };
 
         mime
-    }
-}
-
-impl From<Response> for HyperResponse<Full<Bytes>> {
-    fn from(resp: Response) -> Self {
-        resp.into_hyper()
     }
 }
 

@@ -1,10 +1,13 @@
-use crate::handler::{Handler, Next, Request, Response};
+use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
 use layer::Layer;
 use matchit::Router as MatchitRouter;
 use route::Route;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 mod layer;
@@ -19,8 +22,6 @@ pub struct Router {
     pub route_matcher: MatchitRouter<Vec<usize>>,
     pub middleware_matcher: MatchitRouter<Vec<usize>>,
 }
-
-// TODO next take care of handling/storing/accessing search params
 
 impl Router {
     pub fn route(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Route {
@@ -56,8 +57,8 @@ impl Router {
         return self;
     }
 
-    pub fn handle(&self, req: &Request, res: &mut Response) {
-        // TODO! handle middleware matches so that all middlewares that match the path (for example /test and /:slug) both get called
+    pub fn handle(&self, req: &mut Request, res: &mut Response) {
+        // TODO! handle middleware matches so that all middlewares that match the path (for example /test and /:slug) both get called in order of def
 
         // gather matched middlewares
         let mut matched = self
@@ -66,9 +67,20 @@ impl Router {
             .map(|m| m.value.iter().copied().collect::<Vec<_>>())
             .unwrap_or_default();
 
+        let path = req.uri().path().to_owned();
+
         // add matched routes
-        if let Ok(route_matches) = self.route_matcher.at(req.uri().path()) {
-            matched.extend(route_matches.value.iter().copied());
+        if let Ok(route_match) = self.route_matcher.at(&path) {
+            let params = route_match
+                .params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+
+            req.set_params(params);
+            matched.extend(route_match.value.iter().copied());
+        } else {
+            req.set_params(HashMap::new());
         }
 
         if matched.is_empty() {

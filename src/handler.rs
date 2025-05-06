@@ -2,7 +2,7 @@ use core::fmt;
 use std::sync::Arc;
 
 mod next;
-mod request;
+pub mod request;
 pub mod response;
 
 pub use next::Next;

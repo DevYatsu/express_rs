@@ -3,10 +3,13 @@ use hyper::server::conn::http1;
 use hyper::service::Service;
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
+use log::error;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use tokio::net::TcpListener;
+
+use crate::handler::response::error::ResponseError;
 
 pub struct Server;
 
@@ -19,7 +22,7 @@ impl Server {
         F: Fn() -> S + Send + Sync + 'static + Clone,
         S: Service<
                 Request<Incoming>,
-                Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = hyper::Error> + Send>>>,
+                Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>,
                 Error = Infallible,
             > + Send
             + 'static,
@@ -34,7 +37,7 @@ impl Server {
 
             tokio::spawn(async move {
                 if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                    eprintln!("Connection error: {}", err);
+                    error!("Connection error: {}", err);
                 }
             });
         }
