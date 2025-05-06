@@ -19,3 +19,6 @@ target/
 expressjs_tests/
 
 .DS_Store
+
+actix/
+Cargo.lock

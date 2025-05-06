@@ -1,10 +1,9 @@
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
 use layer::Layer;
-use matchit::Router as MatchitRouter;
-use middleware::MiddlewareRouter;
+use matchthem::Router as MatchitRouter;
 use route::Route;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,7 +20,6 @@ pub use middleware::Middleware;
 pub struct Router {
     stack: Vec<Layer>,
     route_matcher: MatchitRouter<Vec<usize>>,
-//    pub middleware_matcher: MatchitRouter<Vec<usize>>,
     pub middleware_matcher: MatchitRouter<Vec<usize>>,
 }
 
@@ -45,9 +43,6 @@ impl Router {
     pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
         let path = &middleware.target_path().into();
 
-        let mut r = MiddlewareRouter::new();
-        r.insert(path, self.stack.len()).unwrap();
-
         if let Ok(entry) = self.middleware_matcher.at_mut(path) {
             entry.value.push(self.stack.len());
         } else {
@@ -64,14 +59,18 @@ impl Router {
     }
 
     pub fn handle(&self, req: &mut Request, res: &mut Response) {
-        // TODO! handle middleware matches so that all middlewares that match the path (for example /test and /:slug) both get called in order of def
+        // TODO! handle what to do with middleware url params
+        // i believe we should expose middleware url params inside of middleware handler
+        // and route url params inside of route handler
 
         // gather matched middlewares
         let mut matched = self
             .middleware_matcher
-            .at(req.uri().path())
-            .map(|m| m.value.iter().copied().collect::<Vec<_>>())
-            .unwrap_or_default();
+            .all_matches(req.uri().path())
+            .iter()
+            .map(|m| m.value)
+            .flatten()
+            .collect::<Vec<_>>();
 
         let path = req.uri().path().to_owned();
 
@@ -84,7 +83,7 @@ impl Router {
                 .collect();
 
             req.set_params(params);
-            matched.extend(route_match.value.iter().copied());
+            matched.extend(route_match.value);
         } else {
             req.set_params(HashMap::new());
         }
@@ -95,10 +94,13 @@ impl Router {
             return;
         }
 
+        matched.sort();
+        let set: HashSet<usize> = HashSet::from_iter(matched.into_iter().copied());
+
         let mut path_method_matched = false;
 
-        for &i in &matched {
-            let layer = &self.stack[i];
+        for i in &set {
+            let layer = &self.stack[*i];
 
             // case for middleware
             if layer.route.is_none() {
