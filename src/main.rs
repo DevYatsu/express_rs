@@ -68,8 +68,8 @@ async fn main() {
         res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
     });
 
-    app.get("/status/{x}", |req: &Request, res: &mut Response, _| {
-        res.send(format!("Parameter is {}", req.params().get("x").unwrap()));
+    app.get("/status/{status}", |req: &Request, res: &mut Response, _| {
+        res.send(format!("Status is {}", req.params().get("status").unwrap()));
     });
 
     app.get("/file", |_req: &Request, res: &mut Response, _| {
