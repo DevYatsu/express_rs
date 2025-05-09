@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
@@ -91,9 +92,11 @@ macro_rules! generate_methods {
         impl App {
             $(
                 pub fn $method(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Self {
+                    use hyper::Method;
                     self.lazyrouter();
                     let handler = handle.into();
-                    let route = self.router.as_mut().unwrap().route(path, handler.clone());
+                    // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
+                    let route = self.router.as_mut().unwrap().route(path, handler.clone(), Method::from_str(&stringify!($method).to_uppercase()).unwrap());
                     route.$method(handler);
 
                     if cfg!(debug_assertions) {

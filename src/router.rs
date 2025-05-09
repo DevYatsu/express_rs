@@ -1,13 +1,13 @@
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
+use ahash::HashMap;
+use hyper::Method;
 use layer::Layer;
 use matchthem::Router as MatchitRouter;
 use route::Route;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use smallvec::SmallVec;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 mod layer;
@@ -19,105 +19,129 @@ pub use middleware::Middleware;
 #[derive(Debug, Clone, Default)]
 pub struct Router {
     stack: Vec<Layer>,
-    route_matcher: MatchitRouter<Vec<usize>>,
-    pub middleware_matcher: MatchitRouter<Vec<usize>>,
+    pub middleware_matcher: MatchitRouter<SmallVec<[usize; 8]>>,
+    pub routes: HashMap<Method, MatchitRouter<Vec<usize>>>,
 }
 
 impl Router {
-    pub fn route(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Route {
-        if let Ok(entry) = self.route_matcher.at_mut(path.as_ref()) {
-            entry.value.push(self.stack.len());
-        } else {
-            self.route_matcher
-                .insert(path.as_ref(), vec![self.stack.len()])
-                .unwrap();
+    /// Creates a new route at the specified path with the given handler
+    pub fn route(
+        &mut self,
+        path: impl AsRef<str>,
+        handle: impl Into<Handler>,
+        method: Method,
+    ) -> &mut Route {
+        let path_ref = path.as_ref();
+        let layer_index = self.stack.len();
+
+        let method_routes = self.routes.entry(method.clone()).or_default();
+
+        // Insert the new route index into the matcher
+        match method_routes.at_mut(path_ref) {
+            Ok(entry) => entry.value.push(layer_index),
+            Err(_) => {
+                method_routes
+                    .insert(path_ref, vec![layer_index])
+                    .expect("Failed to insert route");
+            }
         }
 
-        let route = Route::new(path.as_ref());
-        let mut layer = Layer::new(path.as_ref(), handle);
+        let route = Route::new(path_ref);
+        let mut layer = Layer::new(path_ref, handle);
         *layer.route_mut() = Some(route.clone());
         self.stack.push(layer);
+
+        // Return mutable reference to the new route
         self.stack.last_mut().unwrap().route_mut().as_mut().unwrap()
     }
 
+    /// Adds middleware to the router
     pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
-        let path = &middleware.target_path().into();
+        let path = middleware.target_path().into();
+        let layer_index = self.stack.len();
 
-        if let Ok(entry) = self.middleware_matcher.at_mut(path) {
-            entry.value.push(self.stack.len());
-        } else {
-            self.middleware_matcher
-                .insert(path, vec![self.stack.len()])
-                .unwrap();
+        // Insert the middleware index into the matcher
+        match self.middleware_matcher.at_mut(&path) {
+            Ok(entry) => entry.value.push(layer_index),
+            Err(_) => {
+                let mut indices = SmallVec::with_capacity(2);
+                indices.push(layer_index);
+                self.middleware_matcher
+                    .insert(path.to_owned(), indices)
+                    .expect("Failed to insert middleware");
+            }
         }
 
-        let mut layer = Layer::new(middleware.target_path(), middleware.create_handler());
+        // Create and add the new middleware layer
+        let mut layer = Layer::new(path, middleware.create_handler());
         layer.kind = M::layer_kind();
         self.stack.push(layer);
 
-        return self;
+        self
     }
 
+    /// Handles a request by matching middleware and route handlers, then executing them.
     pub fn handle(&self, req: &mut Request, res: &mut Response) {
-        // TODO! handle what to do with middleware url params
-        // i believe we should expose middleware url params inside of middleware handler
-        // and route url params inside of route handler
+        let path = req.uri().path();
+        let method = req.method();
 
-        // gather matched middlewares
+        // Collect all middleware matches (including overlapping ones)
         let mut matched = self
             .middleware_matcher
-            .all_matches(req.uri().path())
-            .iter()
-            .map(|m| m.value)
-            .flatten()
-            .collect::<Vec<_>>();
+            .all_matches(path)
+            .into_iter()
+            .flat_map(|m| m.value)
+            .collect::<SmallVec<[&usize; 8]>>();
 
-        let path = req.uri().path().to_owned();
+        // Try to match a route and extract params
+        if let Some(routes) = self.routes.get(method) {
+            if let Ok(route_match) = routes.at(path) {
+                let params = route_match
+                    .params
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+                let value = route_match.value;
 
-        // add matched routes
-        if let Ok(route_match) = self.route_matcher.at(&path) {
-            let params = route_match
-                .params
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-
-            req.set_params(params);
-            matched.extend(route_match.value);
+                req.set_params(params);
+                matched.extend(value);
+            } else {
+                req.set_params(Default::default());
+            }
         } else {
-            req.set_params(HashMap::new());
+            req.set_params(Default::default());
         }
 
         if matched.is_empty() {
-            // No matching middleware -> fallback
             res.status_code(404).unwrap().send("Not Found");
             return;
         }
 
-        matched.sort();
-        let set: HashSet<usize> = HashSet::from_iter(matched.into_iter().copied());
+        // Deduplicate handler indices for execution
+        matched.sort_unstable();
+        matched.dedup();
 
         let mut path_method_matched = false;
+        let req_method = req.method();
 
-        for i in &set {
+        for i in matched {
             let layer = &self.stack[*i];
 
-            // case for middleware
+            // Handle middleware (no associated route)
             if layer.route.is_none() {
                 let (called_next, next_signal) = Self::create_next();
-                layer.handle_request(&req, res, next_signal);
+                layer.handle_request(req, res, next_signal);
 
-                // If `next` was not called, stop processing
                 if !called_next.load(Ordering::Relaxed) {
                     return;
                 }
-
                 continue;
             }
 
+            // Handle route
             let route = layer.route.as_ref().unwrap();
 
-            if !route.methods.contains(req.method()) || route.stack.is_empty() {
+            if !route.methods.contains(req_method) || route.stack.is_empty() {
                 continue;
             }
 
@@ -125,8 +149,7 @@ impl Router {
 
             for route_layer in &route.stack {
                 let (called_next, next_signal) = Self::create_next();
-
-                route_layer.handle_request(&req, res, next_signal);
+                route_layer.handle_request(req, res, next_signal);
 
                 if !called_next.load(Ordering::Relaxed) {
                     return;
@@ -134,13 +157,13 @@ impl Router {
             }
         }
 
-        // matching path but not method
         if !path_method_matched {
             res.status_code(405).unwrap().send("Method Not Allowed");
-            return;
         }
     }
 
+    /// Creates a next signal with a flag to track if it was called
+    #[inline(always)]
     fn create_next() -> (Arc<AtomicBool>, Next) {
         let called_next = Arc::new(AtomicBool::new(false));
         let next_signal = Box::new({
@@ -152,9 +175,4 @@ impl Router {
 
         (called_next, next_signal)
     }
-}
-
-pub trait Find {
-    fn find(&self);
-    fn find_all(&self);
 }

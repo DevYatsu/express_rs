@@ -102,7 +102,7 @@ async fn main() {
         res.write("!").end();
     });
 
-    println!("{:?}", app.router.as_ref().unwrap().middleware_matcher);
+    println!("{:?}", app.router.as_ref().unwrap().routes);
 
     app.listen(PORT, || {
         let local_ip = local_ip().unwrap();
