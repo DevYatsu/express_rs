@@ -1,10 +1,9 @@
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
-use ahash::HashMap;
+use ahash::{HashMap, HashMapExt};
 use hyper::Method;
 use layer::Layer;
-use matchthem::Router as MatchitRouter;
 use route::Route;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -16,11 +15,19 @@ mod route;
 
 pub use middleware::Middleware;
 
+// Fast small collection for handlers
+type LayerIndices = SmallVec<[usize; 8]>;
+// Fast map for method -> route trie
+type MethodRoutes = HashMap<Method, matchthem::Router<LayerIndices>>;
+
 #[derive(Debug, Clone, Default)]
 pub struct Router {
+    /// All registered layers (routes and middleware)
     stack: Vec<Layer>,
-    pub middleware_matcher: MatchitRouter<SmallVec<[usize; 8]>>,
-    pub routes: HashMap<Method, MatchitRouter<Vec<usize>>>,
+    /// Middleware matcher using path trie
+    pub middleware_matcher: matchthem::Router<LayerIndices>,
+    /// Method-specific route matchers, e.g., GET → router for GET routes
+    pub routes: MethodRoutes,
 }
 
 impl Router {
@@ -41,7 +48,7 @@ impl Router {
             Ok(entry) => entry.value.push(layer_index),
             Err(_) => {
                 method_routes
-                    .insert(path_ref, vec![layer_index])
+                    .insert(path_ref, smallvec![layer_index])
                     .expect("Failed to insert route");
             }
         }
@@ -57,17 +64,18 @@ impl Router {
 
     /// Adds middleware to the router
     pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
-        let path = middleware.target_path().into();
+        let path = middleware.target_path();
+        let path: &str = path.as_ref();
         let layer_index = self.stack.len();
 
         // Insert the middleware index into the matcher
-        match self.middleware_matcher.at_mut(&path) {
+        match self.middleware_matcher.at_mut(path) {
             Ok(entry) => entry.value.push(layer_index),
             Err(_) => {
                 let mut indices = SmallVec::with_capacity(2);
                 indices.push(layer_index);
                 self.middleware_matcher
-                    .insert(path.to_owned(), indices)
+                    .insert(path, indices)
                     .expect("Failed to insert middleware");
             }
         }
@@ -96,14 +104,20 @@ impl Router {
         // Try to match a route and extract params
         if let Some(routes) = self.routes.get(method) {
             if let Ok(route_match) = routes.at(path) {
-                let params = route_match
-                    .params
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect();
-                let value = route_match.value;
+                // todo! replace with a string interner in the future
+                // Pre-allocate a hashmap for route parameters with known capacity
+                let mut params = HashMap::with_capacity(route_match.params.len());
 
+                // Convert param keys and values to `Arc<str>` for shared, cheap-to-clone ownership
+                for (k, v) in route_match.params.iter() {
+                    params.insert(Arc::<str>::from(k), Arc::<str>::from(v));
+                }
+
+                // Store parsed route parameters into the request for downstream access
+                let value = route_match.value;
                 req.set_params(params);
+
+                // Extend the matched handler list with all handler indices for this route
                 matched.extend(value);
             } else {
                 req.set_params(Default::default());
@@ -118,8 +132,8 @@ impl Router {
         }
 
         // Deduplicate handler indices for execution
-        matched.sort_unstable();
         matched.dedup();
+        matched.sort_unstable();
 
         let mut path_method_matched = false;
         let req_method = req.method();
@@ -141,7 +155,7 @@ impl Router {
             // Handle route
             let route = layer.route.as_ref().unwrap();
 
-            if !route.methods.contains(req_method) || route.stack.is_empty() {
+            if route.stack.is_empty() || !route.methods.iter().any(|m| m == req_method) {
                 continue;
             }
 

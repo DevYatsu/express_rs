@@ -1,63 +1,50 @@
+use ahash::HashMap;
 use hyper::{Request as HRequest, body::Incoming};
-use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Aliased request type.
 pub type Request = HRequest<Incoming>;
 
 /// Wrapper type for route parameters.
 #[derive(Debug, Clone, Default)]
-pub struct RouteParams(HashMap<String, String>);
+pub struct RouteParams(HashMap<Arc<str>, Arc<str>>);
 
 impl RouteParams {
-    /// Returns a parameter by key as `Option<&str>`.
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).map(String::as_str)
+        self.0.get(key).map(|s| s.as_ref())
     }
 
-    /// Returns `true` if the specified key exists.
     pub fn contains(&self, key: &str) -> bool {
         self.0.contains_key(key)
     }
 
-    /// Returns the number of stored parameters.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Returns `true` if there are no parameters.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Returns an iterator over `(key, value)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
-        self.0.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
     }
 
-    /// Converts to the underlying `HashMap`.
-    pub fn into_inner(self) -> HashMap<String, String> {
+    pub fn into_inner(self) -> HashMap<Arc<str>, Arc<str>> {
         self.0
     }
 
-    /// Returns a clone of the internal `HashMap`.
-    pub fn to_map(&self) -> HashMap<String, String> {
+    pub fn to_map(&self) -> HashMap<Arc<str>, Arc<str>> {
         self.0.clone()
     }
 }
 
-/// Public extension trait for accessing route params on a request.
 pub trait RequestExt {
-    /// Gets route parameters.  
-    ///
-    /// # Panics
-    /// Panics if params haven't been set yet—this is a programming error in the framework.
     fn params(&self) -> &RouteParams;
 }
 
-/// Internal-only trait for setting route parameters.
 pub(crate) trait RequestExtInternal {
-    /// Sets route parameters on a request.
-    fn set_params(&mut self, params: HashMap<String, String>);
+    fn set_params(&mut self, params: HashMap<Arc<str>, Arc<str>>);
 }
 
 impl RequestExt for Request {
@@ -69,7 +56,12 @@ impl RequestExt for Request {
 }
 
 impl RequestExtInternal for Request {
-    fn set_params(&mut self, params: HashMap<String, String>) {
-        self.extensions_mut().insert(RouteParams(params));
+    fn set_params(&mut self, params: HashMap<Arc<str>, Arc<str>>) {
+        let converted = params
+            .into_iter()
+            .map(|(k, v)| (Arc::from(k), Arc::from(v)))
+            .collect();
+
+        self.extensions_mut().insert(RouteParams(converted));
     }
 }

@@ -7,7 +7,7 @@ use crate::{
 pub struct StaticServeMiddleware(pub &'static str);
 
 impl Middleware for StaticServeMiddleware {
-    fn target_path(&self) -> impl Into<String> {
+    fn target_path(&self) -> impl AsRef<str> {
         format!("/{}/{{*p}}", self.0.trim_start_matches('/'))
     }
 
