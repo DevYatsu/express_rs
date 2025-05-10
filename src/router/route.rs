@@ -44,5 +44,5 @@ macro_rules! generate_methods {
 }
 
 generate_methods! {
-    methods: [get, post, patch, delete]
+    methods: [get, post, put, delete, patch, head, connect, trace]
 }

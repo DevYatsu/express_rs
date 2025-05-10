@@ -1,6 +1,6 @@
+use crate::router::interner::{INTERNER, Symbol};
 use ahash::HashMap;
 use hyper::{Request as HRequest, body::Incoming};
-use crate::router::{Symbol, INTERNER};
 
 /// Aliased request type.
 pub type Request = HRequest<Incoming>;
@@ -12,16 +12,16 @@ pub struct RouteParams(HashMap<Symbol, Symbol>);
 impl RouteParams {
     /// Get the parameter value by string key, if it exists.
     pub fn get(&self, key: &str) -> Option<String> {
-        let interner = INTERNER.read().unwrap();
-        let sym = interner.get(key)?;
-        let val = self.0.get(&sym)?;
-        interner.resolve(*val).map(|s| s.to_owned())
+        let sym_key = INTERNER.get(key)?;
+        let sym_val = self.0.get(&sym_key)?;
+        INTERNER.resolve(*sym_val).map(|s| s.to_owned())
     }
 
     /// Check if a parameter with the given key exists.
     pub fn contains(&self, key: &str) -> bool {
-        let interner = INTERNER.read().unwrap();
-        interner.get(key).map_or(false, |sym| self.0.contains_key(&sym))
+        INTERNER
+            .get(key)
+            .map_or(false, |sym| self.0.contains_key(&sym))
     }
 
     /// Return the number of parameters.
@@ -36,30 +36,21 @@ impl RouteParams {
 
     /// Returns an iterator over all parameters resolved to strings.
     pub fn iter(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        let interner = INTERNER.read().unwrap();
-        self.0.iter().filter_map(move |(k, v)| {
+        self.0.iter().filter_map(|(k, v)| {
             Some((
-                interner.resolve(*k)?.to_owned(),
-                interner.resolve(*v)?.to_owned(),
+                INTERNER.resolve(*k)?.to_string(),
+                INTERNER.resolve(*v)?.to_string(),
             ))
         })
     }
-
-    /// Take ownership of the underlying symbol map.
-    pub fn into_inner(self) -> HashMap<Symbol, Symbol> {
-        self.0
-    }
-
-    /// Clone the internal symbol map.
-    pub fn to_map(&self) -> HashMap<Symbol, Symbol> {
-        self.0.clone()
-    }
 }
 
+/// Public trait to access route parameters.
 pub trait RequestExt {
     fn params(&self) -> &RouteParams;
 }
 
+/// Internal trait to set route parameters from a router.
 pub(crate) trait RequestExtInternal {
     fn set_params(&mut self, params: HashMap<Symbol, Symbol>);
 }

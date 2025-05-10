@@ -96,7 +96,7 @@ macro_rules! generate_methods {
                     self.lazyrouter();
                     let handler = handle.into();
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
-                    let route = self.router.as_mut().unwrap().route(path, handler.clone(), Method::from_str(&stringify!($method).to_uppercase()).unwrap());
+                    let route = self.router.as_mut().unwrap().route(path, handler.clone(), &Method::from_str(&stringify!($method).to_uppercase()).unwrap());
                     route.$method(handler);
 
                     if cfg!(debug_assertions) {
@@ -111,5 +111,5 @@ macro_rules! generate_methods {
 }
 
 generate_methods! {
-    methods: [get, post, patch, delete]
+    methods: [get, post, put, delete, patch, head, connect, trace]
 }
