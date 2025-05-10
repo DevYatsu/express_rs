@@ -1,6 +1,5 @@
-use super::route::Route;
+use super::{method_flag::MethodKind, route::Route};
 use crate::handler::{Handler, Next, Request, Response};
-use hyper::Method;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LayerKind {
@@ -12,7 +11,7 @@ pub enum LayerKind {
 
 #[derive(Debug, Clone, Default)]
 pub struct Layer {
-    pub method: Option<Method>,
+    pub method: Option<MethodKind>,
     pub handle: Handler,
     pub route: Option<Route>,
     pub kind: LayerKind,

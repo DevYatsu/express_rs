@@ -1,4 +1,4 @@
-use super::layer::Layer;
+use super::{layer::Layer, method_flag::MethodKind};
 use crate::handler::Handler;
 use hyper::Method;
 use std::collections::HashSet;
@@ -7,7 +7,7 @@ use std::collections::HashSet;
 pub struct Route {
     pub path: String,
     pub stack: Vec<Layer>,
-    pub methods: HashSet<Method>,
+    pub methods: HashSet<MethodKind>,
 }
 
 impl Route {
@@ -30,8 +30,8 @@ macro_rules! generate_methods {
                     use std::str::FromStr;
                     use super::Layer;
                     let mut layer = Layer::new("/", handler);
-                    let method = Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method");
-                    layer.method = Some(method.clone());
+                    let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
+                    layer.method = Some(method);
 
                     self.methods.insert(method);
                     self.stack.push(layer);

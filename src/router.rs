@@ -3,7 +3,7 @@ use crate::handler::{Handler, Next, Request, Response, request::RequestExtIntern
 use ahash::{HashMap, HashMapExt};
 use hyper::Method;
 use layer::Layer;
-use method_flag::MethodFlags;
+use method_flag::MethodKind;
 use route::Route;
 use smallvec::{SmallVec, smallvec};
 use std::sync::{
@@ -20,7 +20,7 @@ mod route;
 pub use middleware::Middleware;
 
 type LayerIndices = SmallVec<[usize; 8]>;
-type MethodRoutes = HashMap<MethodFlags, matchthem::Router<LayerIndices>>;
+type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
 
 #[derive(Debug, Clone, Default)]
 pub struct Router {
@@ -39,7 +39,7 @@ impl Router {
         let path_ref = path.as_ref();
         let layer_index = self.stack.len();
 
-        let method_flag = MethodFlags::from_method(method);
+        let method_flag = MethodKind::from_hyper(method);
 
         let method_routes = self.routes.entry(method_flag).or_default();
 
@@ -85,7 +85,7 @@ impl Router {
 
     pub fn handle(&self, req: &mut Request, res: &mut Response) {
         let path = req.uri().path();
-        let method = &MethodFlags::from_method(req.method());
+        let method = &MethodKind::from_hyper(req.method());
 
         // Gather middleware handlers
         let mut matched = self
@@ -144,7 +144,6 @@ impl Router {
         matched.dedup();
 
         let mut path_method_matched = false;
-        let method = req.method();
 
         for i in matched {
             let layer = &self.stack[*i];
