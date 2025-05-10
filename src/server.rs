@@ -11,7 +11,7 @@ use tokio::signal;
 
 use crate::handler::response::error::ResponseError;
 
-pub struct Server;
+pub(crate) struct Server;
 
 impl Server {
     pub async fn bind<F, S>(

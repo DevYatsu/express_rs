@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Default)]
 pub struct App {
@@ -49,8 +50,24 @@ impl App {
                 service_fn(move |req| {
                     let app = app.clone();
                     async move {
-                        let app = Arc::try_unwrap(app).unwrap_or_else(|arc| (*arc).clone());
-                        app.call(req).await
+                        if cfg!(debug_assertions) {
+                            let start = Instant::now();
+
+                            let method = req.method().clone();
+                            let path = req.uri().path().to_string();
+
+                            let app = Arc::try_unwrap(app).unwrap_or_else(|arc| (*arc).clone());
+                            let response = app.call(req).await;
+
+                            let elapsed = start.elapsed();
+
+                            info!("{} {} ({} ms)", method, path, elapsed.as_millis());
+
+                            response
+                        } else {
+                            let app = Arc::try_unwrap(app).unwrap_or_else(|arc| (*arc).clone());
+                            app.call(req).await
+                        }
                     }
                 })
             }
@@ -67,6 +84,7 @@ impl App {
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::service::Service;
 use hyper::{Request, Response};
+use log::info;
 
 impl Service<Request<Incoming>> for App {
     type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>;
