@@ -8,6 +8,14 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use string_interner::{backend::StringBackend, symbol::SymbolU32, StringInterner};
+use once_cell::sync::Lazy;
+use std::sync::RwLock;
+
+pub(crate) type Symbol = SymbolU32;
+type Interner = StringInterner<StringBackend<Symbol>>;
+pub(crate) static INTERNER: Lazy<RwLock<Interner>> = Lazy::new(|| RwLock::new(Interner::default()));
+
 
 mod layer;
 mod middleware;
@@ -104,15 +112,15 @@ impl Router {
         // Try to match a route and extract params
         if let Some(routes) = self.routes.get(method) {
             if let Ok(route_match) = routes.at(path) {
-                // todo! replace with a string interner in the future
-                // Pre-allocate a hashmap for route parameters with known capacity
+                let mut interner = INTERNER.write().unwrap();
                 let mut params = HashMap::with_capacity(route_match.params.len());
-
-                // Convert param keys and values to `Arc<str>` for shared, cheap-to-clone ownership
+                
                 for (k, v) in route_match.params.iter() {
-                    params.insert(Arc::<str>::from(k), Arc::<str>::from(v));
+                    let sym_k = interner.get_or_intern(k);
+                    let sym_v = interner.get_or_intern(v);
+                    params.insert(sym_k, sym_v);
                 }
-
+                
                 // Store parsed route parameters into the request for downstream access
                 let value = route_match.value;
                 req.set_params(params);

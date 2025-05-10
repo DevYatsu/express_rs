@@ -1,40 +1,57 @@
 use ahash::HashMap;
 use hyper::{Request as HRequest, body::Incoming};
-use std::sync::Arc;
+use crate::router::{Symbol, INTERNER};
 
 /// Aliased request type.
 pub type Request = HRequest<Incoming>;
 
 /// Wrapper type for route parameters.
 #[derive(Debug, Clone, Default)]
-pub struct RouteParams(HashMap<Arc<str>, Arc<str>>);
+pub struct RouteParams(HashMap<Symbol, Symbol>);
 
 impl RouteParams {
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).map(|s| s.as_ref())
+    /// Get the parameter value by string key, if it exists.
+    pub fn get(&self, key: &str) -> Option<String> {
+        let interner = INTERNER.read().unwrap();
+        let sym = interner.get(key)?;
+        let val = self.0.get(&sym)?;
+        interner.resolve(*val).map(|s| s.to_owned())
     }
 
+    /// Check if a parameter with the given key exists.
     pub fn contains(&self, key: &str) -> bool {
-        self.0.contains_key(key)
+        let interner = INTERNER.read().unwrap();
+        interner.get(key).map_or(false, |sym| self.0.contains_key(&sym))
     }
 
+    /// Return the number of parameters.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Returns true if there are no parameters.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
+    /// Returns an iterator over all parameters resolved to strings.
+    pub fn iter(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        let interner = INTERNER.read().unwrap();
+        self.0.iter().filter_map(move |(k, v)| {
+            Some((
+                interner.resolve(*k)?.to_owned(),
+                interner.resolve(*v)?.to_owned(),
+            ))
+        })
     }
 
-    pub fn into_inner(self) -> HashMap<Arc<str>, Arc<str>> {
+    /// Take ownership of the underlying symbol map.
+    pub fn into_inner(self) -> HashMap<Symbol, Symbol> {
         self.0
     }
 
-    pub fn to_map(&self) -> HashMap<Arc<str>, Arc<str>> {
+    /// Clone the internal symbol map.
+    pub fn to_map(&self) -> HashMap<Symbol, Symbol> {
         self.0.clone()
     }
 }
@@ -44,7 +61,7 @@ pub trait RequestExt {
 }
 
 pub(crate) trait RequestExtInternal {
-    fn set_params(&mut self, params: HashMap<Arc<str>, Arc<str>>);
+    fn set_params(&mut self, params: HashMap<Symbol, Symbol>);
 }
 
 impl RequestExt for Request {
@@ -56,12 +73,7 @@ impl RequestExt for Request {
 }
 
 impl RequestExtInternal for Request {
-    fn set_params(&mut self, params: HashMap<Arc<str>, Arc<str>>) {
-        let converted = params
-            .into_iter()
-            .map(|(k, v)| (Arc::from(k), Arc::from(v)))
-            .collect();
-
-        self.extensions_mut().insert(RouteParams(converted));
+    fn set_params(&mut self, params: HashMap<Symbol, Symbol>) {
+        self.extensions_mut().insert(RouteParams(params));
     }
 }
