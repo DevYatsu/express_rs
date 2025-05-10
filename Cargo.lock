@@ -223,7 +223,6 @@ name = "express_rs"
 version = "0.1.0"
 dependencies = [
  "ahash",
- "bitflags",
  "bytes",
  "dashmap",
  "env_logger",
