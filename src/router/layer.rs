@@ -47,7 +47,7 @@ impl Layer {
         &mut self.route
     }
 
-    pub fn handle_request(&self, req: &Request, res: &mut Response, next: Next) {
+    pub fn handle_request(&self, req: &mut Request, res: &mut Response, next: Next) {
         self.handle.call(req, res, next)
     }
 }

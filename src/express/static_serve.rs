@@ -12,7 +12,7 @@ impl Middleware for StaticServeMiddleware {
     }
 
     fn create_handler(&self) -> impl Into<Handler> {
-        |req: &Request, res: &mut Response, next: Next| {
+        |req: &mut Request, res: &mut Response, next: Next| {
             let uri_path = req.uri().path();
             let file_path = format!(".{}", uri_path);
 

@@ -29,10 +29,19 @@ use std::{
 
 pub mod error;
 
+/// LRU in-memory cache for file responses.
+///
+/// Stores MIME type and byte content for recently sent static files. Avoids redundant
+/// disk reads for frequently accessed assets. Max size: 128 entries.
 static FILE_CACHE: Lazy<Mutex<LruCache<String, (String, Arc<Bytes>)>>> =
     Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 #[derive(Default)]
+/// Represents an HTTP response.
+///
+/// Supports common patterns such as sending JSON, streaming files, setting headers,
+/// and returning specific status codes. The response can be either a full buffered body
+/// or a streaming body depending on usage.
 pub struct Response {
     status: StatusCode,
     body: BytesMut,
@@ -41,6 +50,9 @@ pub struct Response {
     streaming: Option<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>,
 }
 
+/// Default security and cache-related headers injected into all responses.
+///
+/// Includes no-store caching, XSS and MIME-type protections, and disables frame embedding.
 const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
     let mut map = HeaderMap::new();
     map.insert(
@@ -530,6 +542,9 @@ impl Response {
     }
 }
 
+/// Sanitizes a header value by removing unsafe characters.
+///
+/// Only ASCII graphic characters and spaces are allowed. Prevents header injection attacks.
 fn sanitize_header_value(input: &str) -> HeaderValue {
     let cleaned: String = input
         .chars()

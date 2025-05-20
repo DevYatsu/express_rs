@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 use std::sync::Arc;
 
 mod next;
@@ -9,45 +9,44 @@ pub use next::Next;
 pub use request::Request;
 pub use response::Response;
 
-pub type BoxedHandlerFn = dyn Fn(&Request, &mut Response, Next) + Send + Sync;
+/// A boxed handler function type with mutable request and response.
+pub(crate) type BoxedHandlerFn = dyn Fn(&mut Request, &mut Response, Next) + Send + Sync;
 
-pub struct Handler {
-    inner: Arc<BoxedHandlerFn>,
-}
+/// The core handler abstraction in express_rs.
+#[derive(Clone)]
+pub struct Handler(Arc<BoxedHandlerFn>);
 
 impl Handler {
+    /// Creates a new handler from a closure or function.
+    #[inline(always)]
     pub fn new<F>(f: F) -> Self
     where
-        F: Fn(&Request, &mut Response, Next) + Send + Sync + 'static,
+        F: Fn(&mut Request, &mut Response, Next) + Send + Sync + 'static,
     {
-        Self { inner: Arc::new(f) }
+        Self(Arc::new(f))
     }
 
-    pub fn call(&self, req: &Request, res: &mut Response, next: Next) {
-        (self.inner)(req, res, next)
+    /// Calls the handler function.
+    #[inline(always)]
+    pub fn call(&self, req: &mut Request, res: &mut Response, next: Next) {
+        (self.0)(req, res, next)
     }
 }
 
 impl<F> From<F> for Handler
 where
-    F: Fn(&Request, &mut Response, Next) + Send + Sync + 'static,
+    F: Fn(&mut Request, &mut Response, Next) + Send + Sync + 'static,
 {
+    #[inline(always)]
     fn from(f: F) -> Self {
-        Handler { inner: Arc::new(f) }
+        Self::new(f)
     }
 }
 
 impl Default for Handler {
+    #[inline(always)]
     fn default() -> Self {
-        (|_: &Request, _: &mut Response, _: Next| {}).into()
-    }
-}
-
-impl Clone for Handler {
-    fn clone(&self) -> Self {
-        Handler {
-            inner: Arc::clone(&self.inner),
-        }
+        Self::new(|_, _, _| {})
     }
 }
 

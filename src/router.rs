@@ -22,10 +22,25 @@ pub use middleware::Middleware;
 type LayerIndices = SmallVec<[usize; 8]>;
 type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
 
+/// The core routing engine for `express_rs`.
+///
+/// `Router` is responsible for registering route and middleware handlers,
+/// and efficiently dispatching them based on request paths and HTTP methods.
 #[derive(Debug, Clone, Default)]
 pub struct Router {
+    /// All layers (routes and middleware), stored in order of registration.
+    ///
+    /// Each `Layer` contains metadata and a handler function.
     stack: Vec<Layer>,
+
+    /// Path-based matcher for global middleware.
+    ///
+    /// Middleware is matched and executed before route-specific handlers.
     pub middleware_matcher: matchthem::Router<LayerIndices>,
+
+    /// HTTP method-specific route matchers.
+    ///
+    /// For example, `Method::GET` maps to its own matcher tree.
     pub routes: MethodRoutes,
 }
 

@@ -2,7 +2,6 @@ use crate::handler::response::error::ResponseError;
 use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
 use crate::router::{Middleware, Router};
 use crate::server::Server;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -10,30 +9,41 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Default)]
+/// The main application structure for `express_rs`.
+///
+/// This struct represents the entry point of your web application. It holds
+/// the internal router and provides methods to register middleware, define
+/// routes, and start the server.
+///
+/// # Example
+///
+/// ```rust
+/// let mut app = App::default();
+/// app.get("/", |req, res, next| {
+///     res.send("Hello, world!");
+/// });
+/// app.listen(3000, || println!("Server started on port 3000")).await;
+/// ```
+#[derive(Clone, Default)]
 pub struct App {
-    pub cache: HashMap<String, u32>,
-    pub engines: Vec<u32>,
-    pub settings: HashMap<String, u32>,
-    pub router: Option<Router>,
+    /// The internal router responsible for matching and handling requests.
+    ///
+    /// Unlike the original Express.js (which initializes the router lazily),
+    /// this is always present to keep logic simple and fast.
+    pub router: Router,
 }
 
 impl App {
     pub fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
-        self.router.as_ref().unwrap().handle(req, res);
+        self.router.handle(req, res);
     }
 
-    pub fn lazyrouter(&mut self) {
-        if self.router.is_none() {
-            let router = Router::default();
-
-            self.router = Some(router);
-        }
+    fn owned_or_cloned(self: Arc<Self>) -> Self {
+        Arc::try_unwrap(self).unwrap_or_else(|arc| (*arc).clone())
     }
 
     pub fn use_with<M: Middleware>(&mut self, middleware: M) {
-        self.lazyrouter();
-        self.router.as_mut().unwrap().use_with(middleware);
+        self.router.use_with(middleware);
     }
 
     pub async fn listen<T: FnOnce()>(self, port: u16, callback: T) {
@@ -56,7 +66,7 @@ impl App {
                             let method = req.method().clone();
                             let path = req.uri().path().to_string();
 
-                            let app = Arc::try_unwrap(app).unwrap_or_else(|arc| (*arc).clone());
+                            let app = App::owned_or_cloned(app);
                             let response = app.call(req).await;
 
                             let elapsed = start.elapsed();
@@ -65,7 +75,7 @@ impl App {
 
                             response
                         } else {
-                            let app = Arc::try_unwrap(app).unwrap_or_else(|arc| (*arc).clone());
+                            let app = App::owned_or_cloned(app);
                             app.call(req).await
                         }
                     }
@@ -111,10 +121,9 @@ macro_rules! generate_methods {
             $(
                 pub fn $method(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Self {
                     use hyper::Method;
-                    self.lazyrouter();
                     let handler = handle.into();
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
-                    let route = self.router.as_mut().unwrap().route(path, handler.clone(), &Method::from_str(&stringify!($method).to_uppercase()).unwrap());
+                    let route = self.router.route(path, handler.clone(), &Method::from_str(&stringify!($method).to_uppercase()).unwrap());
                     route.$method(handler);
 
                     if cfg!(debug_assertions) {

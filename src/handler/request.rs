@@ -2,39 +2,45 @@ use crate::router::interner::{INTERNER, Symbol};
 use ahash::HashMap;
 use hyper::{Request as HRequest, body::Incoming};
 
-/// Aliased request type.
+/// Aliased request type for the framework.
+///
+/// Wraps a [`hyper::Request`] using the [`Incoming`] body type for compatibility with async streams.
 pub type Request = HRequest<Incoming>;
 
-/// Wrapper type for route parameters.
+/// Stores route parameters extracted from dynamic segments of a matched route.
+///
+/// Internally maps interned symbols to other interned symbols for compact, efficient key-value storage.
 #[derive(Debug, Clone, Default)]
 pub struct RouteParams(HashMap<Symbol, Symbol>);
 
 impl RouteParams {
-    /// Get the parameter value by string key, if it exists.
+    /// Gets the parameter value associated with the given key, if present.
+    ///
+    /// Resolves both the key and the value using the global symbol interner.
     pub fn get(&self, key: &str) -> Option<String> {
         let sym_key = INTERNER.get(key)?;
         let sym_val = self.0.get(&sym_key)?;
         INTERNER.resolve(*sym_val).map(|s| s.to_owned())
     }
 
-    /// Check if a parameter with the given key exists.
+    /// Returns `true` if the given key exists in the parameter map.
     pub fn contains(&self, key: &str) -> bool {
         INTERNER
             .get(key)
             .map_or(false, |sym| self.0.contains_key(&sym))
     }
 
-    /// Return the number of parameters.
+    /// Returns the total number of parameters.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Returns true if there are no parameters.
+    /// Returns `true` if there are no parameters.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Returns an iterator over all parameters resolved to strings.
+    /// Returns an iterator over all parameters as resolved string key-value pairs.
     pub fn iter(&self) -> impl Iterator<Item = (String, String)> + '_ {
         self.0.iter().filter_map(|(k, v)| {
             Some((
@@ -45,13 +51,15 @@ impl RouteParams {
     }
 }
 
-/// Public trait to access route parameters.
+/// Extension trait to access route parameters from a [`Request`] object.
 pub trait RequestExt {
+    /// Returns the [`RouteParams`] associated with this request.
     fn params(&self) -> &RouteParams;
 }
 
-/// Internal trait to set route parameters from a router.
+/// Internal trait used to attach route parameters to a request during routing.
 pub(crate) trait RequestExtInternal {
+    /// Sets the [`RouteParams`] using a raw `HashMap<Symbol, Symbol>`.
     fn set_params(&mut self, params: HashMap<Symbol, Symbol>);
 }
 
