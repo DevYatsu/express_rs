@@ -19,9 +19,8 @@ async fn main() {
     let mut app = app();
 
     app.use_with("/src/{{*p}}", StaticServeMiddleware);
-    app.use_with("/css", StaticServeMiddleware);
-    app.use_with("/src", StaticServeMiddleware);
-    app.use_with("/expressjs_tests", StaticServeMiddleware);
+    app.use_with("/css/{{*p}}", StaticServeMiddleware);
+    app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
 
     app.get("/", |_req: &mut Request, res: &mut Response, next| {
         let html = r#"
