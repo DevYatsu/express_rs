@@ -16,7 +16,7 @@ impl Handler for StaticServeMiddleware {
             let file_path = format!(".{}", uri_path);
 
             if let Err(_) = res.send_file(&file_path) {
-                next.call().await;
+                next.call();
             }
         }
         .boxed()

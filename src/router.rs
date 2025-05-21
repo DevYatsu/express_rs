@@ -157,12 +157,13 @@ impl Router {
         for i in matched {
             let layer = &self.stack[*i];
             let next_clone = next.clone();
+            next_clone.reset();
 
             match layer {
                 Layer::Middleware { .. } => {
                     layer.handle_request(req, res, next_clone).await;
 
-                    if next.was_called() {
+                    if !next.was_called() {
                         return;
                     }
 
@@ -180,14 +181,12 @@ impl Router {
 
                     layer.handle_request(req, res, next_clone).await;
 
-                    if next.was_called() {
+                    if !next.was_called() {
                         return;
                     }
                 }
             };
         }
-
-        drop(next);
 
         if !path_method_matched {
             res.status_code(405).unwrap().send("Method Not Allowed");

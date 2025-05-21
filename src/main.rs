@@ -94,6 +94,18 @@ async fn main() {
         async {}
     });
 
+    app.use_with(
+        "/hello",
+        |req: &mut Request, res: &mut Response, next: Next| {
+            let path = req.uri().path();
+            info!("Request received for path: {}", path);
+
+            res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
+            next.call();
+            async move {}
+        },
+    );
+
     app.get(
         "/hello",
         |_req: &mut Request, res: &mut Response, next: Next| {
@@ -104,9 +116,9 @@ async fn main() {
                 )
                 .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
-            async move {
-                next.call().await;
-            }
+            next.call();
+
+            async {}
         },
     );
 

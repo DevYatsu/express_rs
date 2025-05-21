@@ -12,9 +12,13 @@ impl Next {
         }
     }
 
-    pub async fn call(&self) {
+    pub fn call(&self) {
         // Could await something, or just set a flag
         self.called.store(true, Ordering::Relaxed);
+    }
+
+    pub fn reset(&self) {
+        self.called.store(false, Ordering::Relaxed);
     }
 
     pub fn was_called(&self) -> bool {
