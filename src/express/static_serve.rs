@@ -1,18 +1,17 @@
-use crate::{
-    handler::{Handler, Next, Request, Response},
-    router::Middleware,
-};
+use crate::handler::{Handler, HandlerResult, Next, Request, Response};
+use futures_util::FutureExt;
 
 #[derive(Debug, Clone)]
-pub struct StaticServeMiddleware(pub &'static str);
+pub struct StaticServeMiddleware;
 
-impl Middleware for StaticServeMiddleware {
-    fn target_path(&self) -> impl AsRef<str> {
-        format!("/{}/{{*p}}", self.0.trim_start_matches('/'))
-    }
-
-    fn create_handler(&self) -> impl Into<Handler> {
-        |req: &mut Request, res: &mut Response, next: Next| {
+impl Handler for StaticServeMiddleware {
+    fn call<'a>(
+        &'a self,
+        req: &'a mut Request,
+        res: &'a mut Response,
+        mut next: Next,
+    ) -> HandlerResult<'a> {
+        async move {
             let uri_path = req.uri().path();
             let file_path = format!(".{}", uri_path);
 
@@ -20,5 +19,6 @@ impl Middleware for StaticServeMiddleware {
                 next();
             }
         }
+        .boxed()
     }
 }

@@ -1,1 +1,3 @@
-pub type Next = Box<dyn FnOnce() + Send>;
+use std::sync::Arc;
+
+pub type Next = Arc<dyn Fn() + Send + Sync + 'static>;

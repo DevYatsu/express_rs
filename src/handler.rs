@@ -1,57 +1,83 @@
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 mod next;
 pub mod request;
 pub mod response;
 
+use futures_util::FutureExt;
 pub use next::Next;
 pub use request::Request;
 pub use response::Response;
 
-/// A boxed handler function type with mutable request and response.
-pub(crate) type BoxedHandlerFn = dyn Fn(&mut Request, &mut Response, Next) + Send + Sync;
+pub type HandlerResult<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
-/// The core handler abstraction in express_rs.
-#[derive(Clone)]
-pub struct Handler(Arc<BoxedHandlerFn>);
-
-impl Handler {
-    /// Creates a new handler from a closure or function.
-    #[inline(always)]
-    pub fn new<F>(f: F) -> Self
-    where
-        F: Fn(&mut Request, &mut Response, Next) + Send + Sync + 'static,
-    {
-        Self(Arc::new(f))
-    }
-
-    /// Calls the handler function.
-    #[inline(always)]
-    pub fn call(&self, req: &mut Request, res: &mut Response, next: Next) {
-        (self.0)(req, res, next)
+/// Trait for async handler abstraction.
+pub trait Handler: Send + Sync + 'static {
+    fn call<'a>(
+        &'a self,
+        req: &'a mut Request,
+        res: &'a mut Response,
+        next: Next,
+    ) -> HandlerResult<'a> {
+        async {}.boxed()
     }
 }
 
-impl<F> From<F> for Handler
+/// Handler struct that wraps any compatible async function or closure.
+#[derive(Clone)]
+pub struct FnHandler(Arc<dyn Handler>);
+
+impl FnHandler {
+    #[inline(always)]
+    pub fn new<H>(handler: H) -> Self
+    where
+        H: Handler,
+    {
+        Self(Arc::new(handler))
+    }
+
+    #[inline(always)]
+    pub fn call<'a>(
+        &'a self,
+        req: &'a mut Request,
+        res: &'a mut Response,
+        next: Next,
+    ) -> HandlerResult<'a> {
+        self.0.call(req, res, next)
+    }
+}
+
+impl<H> From<H> for FnHandler
 where
-    F: Fn(&mut Request, &mut Response, Next) + Send + Sync + 'static,
+    H: Handler,
 {
     #[inline(always)]
-    fn from(f: F) -> Self {
-        Self::new(f)
+    fn from(handler: H) -> Self {
+        Self::new(handler)
     }
 }
 
-impl Default for Handler {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::new(|_, _, _| {})
-    }
-}
-
-impl fmt::Debug for Handler {
+impl fmt::Debug for FnHandler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Handler { ... }")
+    }
+}
+
+/// Blanket impl for closures or functions that match the async signature.
+impl<F, Fut> Handler for F
+where
+    F: Fn(&mut Request, &mut Response, Next) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    fn call<'a>(
+        &'a self,
+        req: &'a mut Request,
+        res: &'a mut Response,
+        next: Next,
+    ) -> HandlerResult<'a> {
+        (self)(req, res, next).boxed()
     }
 }

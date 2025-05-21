@@ -18,12 +18,12 @@ async fn main() {
     const PORT: u16 = 9000;
     let mut app = app();
 
-    app.use_with(StaticServeMiddleware("src"));
-    app.use_with(StaticServeMiddleware("css"));
-    app.use_with(StaticServeMiddleware("src"));
-    app.use_with(StaticServeMiddleware("expressjs_tests"));
+    app.use_with("/src/{{*p}}", StaticServeMiddleware);
+    app.use_with("/css", StaticServeMiddleware);
+    app.use_with("/src", StaticServeMiddleware);
+    app.use_with("/expressjs_tests", StaticServeMiddleware);
 
-    app.get("/", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/", |_req: &mut Request, res: &mut Response, next| async {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -52,9 +52,9 @@ async fn main() {
             .send(html);
 
         async {};
-    }); 
+    });
 
-    app.get("/json", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/json", |_req: &mut Request, res: &mut Response, _| async {
         res.json(&json!({
             "message": "Hello from JSON!",
             "status": "success",
@@ -63,22 +63,22 @@ async fn main() {
         .unwrap();
     });
 
-    app.get("/redirect", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/redirect", |_req: &mut Request, res: &mut Response, _| async {
         res.redirect("/");
     });
 
-    app.get("/status", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/status", |_req: &mut Request, res: &mut Response, _| async {
         res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
     });
 
     app.get(
         "/status/{status}",
-        |req: &mut Request, res: &mut Response, _| {
+        |req: &mut Request, res: &mut Response, _| async {
             res.send(format!("Status is {}", req.params().get("status").unwrap()));
         },
     );
 
-    app.get("/file", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/file", |_req: &mut Request, res: &mut Response, _| async {
         res.send_file("./Cargo.lock")
             .map_err(|_| {
                 *res = Response::internal_error();
@@ -88,7 +88,7 @@ async fn main() {
 
     app.get(
         "/hello",
-        |_req: &mut Request, res: &mut Response, next: Next| {
+        |_req: &mut Request, res: &mut Response, next: Next| async move {
             res.write("Hello, world")
                 .set(
                     header::CACHE_CONTROL,
@@ -96,11 +96,11 @@ async fn main() {
                 )
                 .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
-            next()
+            next();
         },
     );
 
-    app.get("/hello", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/hello", |_req: &mut Request, res: &mut Response, _| async {
         res.write("!").end();
     });
 

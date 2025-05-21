@@ -1,6 +1,6 @@
 use crate::handler::response::error::ResponseError;
 use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
-use crate::router::{Middleware, Router};
+use crate::router::Router;
 use crate::server::Server;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -24,7 +24,7 @@ use std::time::Instant;
 /// });
 /// app.listen(3000, || println!("Server started on port 3000")).await;
 /// ```
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct App {
     /// The internal router responsible for matching and handling requests.
     ///
@@ -38,8 +38,8 @@ impl App {
         self.router.handle(req, res).await
     }
 
-    pub fn use_with<M: Middleware>(&mut self, middleware: M) {
-        self.router.use_with(middleware);
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Handler) {
+        self.router.use_with(path, middleware);
     }
 
     pub async fn listen<T, Fut>(self, port: u16, callback: T)
@@ -116,6 +116,7 @@ impl Service<Request<Incoming>> for AppService {
 }
 
 use crate::handler::Handler;
+use crate::router::MethodKind;
 
 macro_rules! generate_methods {
     (
@@ -123,12 +124,12 @@ macro_rules! generate_methods {
     ) => {
         impl App {
             $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Self {
+                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl Handler) -> &mut Self {
                     use hyper::Method;
-                    let handler = handle.into();
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
-                    let route = self.router.route(path, handler.clone(), &Method::from_str(&stringify!($method).to_uppercase()).unwrap());
-                    route.$method(handler);
+                    let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
+
+                    let route = self.router.route(path, handler, method);
 
                     if cfg!(debug_assertions) {
                         println!("route: {:?}", route);

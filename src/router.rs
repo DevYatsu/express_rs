@@ -1,10 +1,7 @@
 use self::interner::INTERNER;
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
 use ahash::{HashMap, HashMapExt};
-use hyper::Method;
 use layer::Layer;
-use method_flag::MethodKind;
-use route::Route;
 use smallvec::{SmallVec, smallvec};
 use std::sync::{
     Arc,
@@ -13,11 +10,9 @@ use std::sync::{
 
 pub mod interner;
 mod layer;
-mod method_flag;
-mod middleware;
-mod route;
+mod method;
 
-pub use middleware::Middleware;
+pub use method::MethodKind;
 
 type LayerIndices = SmallVec<[usize; 8]>;
 type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
@@ -26,7 +21,7 @@ type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
 ///
 /// `Router` is responsible for registering route and middleware handlers,
 /// and efficiently dispatching them based on request paths and HTTP methods.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Router {
     /// All layers (routes and middleware), stored in order of registration.
     ///
@@ -35,7 +30,7 @@ pub struct Router {
 
     /// Path-based matcher for global middleware.
     ///
-    /// Middleware is matched and executed before route-specific handlers.
+    /// Middlewares are matched and executed in order of registration.
     pub middleware_matcher: matchthem::Router<LayerIndices>,
 
     /// HTTP method-specific route matchers.
@@ -48,15 +43,13 @@ impl Router {
     pub fn route(
         &mut self,
         path: impl AsRef<str>,
-        handle: impl Into<Handler>,
-        method: &Method,
-    ) -> &mut Route {
-        let path_ref = path.as_ref();
+        handler: impl Handler,
+        method: MethodKind,
+    ) -> &mut Layer {
+        let path_ref: &str = path.as_ref();
         let layer_index = self.stack.len();
 
-        let method_flag = MethodKind::from_hyper(method);
-
-        let method_routes = self.routes.entry(method_flag).or_default();
+        let method_routes = self.routes.entry(method).or_default();
 
         match method_routes.at_mut(path_ref) {
             Ok(entry) => entry.value.push(layer_index),
@@ -67,17 +60,14 @@ impl Router {
             }
         }
 
-        let route = Route::new(path_ref);
-        let mut layer = Layer::new(path_ref, handle);
-        *layer.route_mut() = Some(route);
-        self.stack.push(layer);
+        let route = Layer::route(path_ref, method, handler);
+        self.stack.push(route);
 
-        self.stack.last_mut().unwrap().route_mut().as_mut().unwrap()
+        self.stack.last_mut().unwrap()
     }
 
-    pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
-        let path = middleware.target_path();
-        let path: &str = path.as_ref();
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Handler) -> &mut Self {
+        let path = path.as_ref();
         let layer_index = self.stack.len();
 
         match self.middleware_matcher.at_mut(path) {
@@ -91,9 +81,8 @@ impl Router {
             }
         }
 
-        let mut layer = Layer::new(path, middleware.create_handler());
-        layer.kind = M::layer_kind();
-        self.stack.push(layer);
+        let middleware = Layer::middleware(path, middleware);
+        self.stack.push(middleware);
 
         self
     }
@@ -160,35 +149,45 @@ impl Router {
 
         let mut path_method_matched = false;
 
+        println!("Matched layers: {:?}", matched);
+
+        let called_next = Arc::new(AtomicBool::new(false));
+        let next: Arc<dyn Fn() + Send + Sync + 'static> = {
+            let called_next = Arc::clone(&called_next);
+            Arc::new(move || {
+                called_next.store(true, Ordering::Relaxed);
+            })
+        };
+
         for i in matched {
             let layer = &self.stack[*i];
 
-            if layer.route.is_none() {
-                let (called_next, next_signal) = Self::create_next();
-                layer.handle_request(req, res, next_signal);
+            match layer {
+                Layer::Middleware { .. } => {
+                    layer.handle_request(req, res, next.clone()).await;
 
-                if !called_next.load(Ordering::Relaxed) {
-                    return;
+                    if !called_next.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
+                Layer::Route {
+                    method: route_method,
+                    ..
+                } => {
+                    if route_method != method {
+                        continue;
+                    }
 
-            let route = layer.route.as_ref().unwrap();
+                    path_method_matched = true;
 
-            if route.stack.is_empty() || !route.methods.iter().any(|m| m == method) {
-                continue;
-            }
+                    layer.handle_request(req, res, next.clone()).await;
 
-            path_method_matched = true;
-
-            for route_layer in &route.stack {
-                let (called_next, next_signal) = Self::create_next();
-                route_layer.handle_request(req, res, next_signal);
-
-                if !called_next.load(Ordering::Relaxed) {
-                    return;
+                    if !called_next.load(Ordering::Relaxed) {
+                        return;
+                    }
                 }
-            }
+            };
         }
 
         if !path_method_matched {
@@ -196,16 +195,16 @@ impl Router {
         }
     }
 
-    #[inline(always)]
-    fn create_next() -> (Arc<AtomicBool>, Next) {
-        let called_next = Arc::new(AtomicBool::new(false));
-        let next_signal = Box::new({
-            let called_next = Arc::clone(&called_next);
-            move || {
-                called_next.store(true, Ordering::Relaxed);
-            }
-        });
+    // #[inline(always)]
+    // fn create_next<'a>() -> (Arc<AtomicBool>, Next) {
+    //     let called_next = Arc::new(AtomicBool::new(false));
+    //     let next_signal: Next = Box::new({
+    //         let called_next = Arc::clone(&called_next);
+    //         move || {
+    //             called_next.store(true, Ordering::Relaxed);
+    //         }
+    //     });
 
-        (called_next, next_signal)
-    }
+    //     (called_next, next_signal)
+    // }
 }
