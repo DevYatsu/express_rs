@@ -104,7 +104,7 @@ async fn main() {
 
     println!("{:?}", app.router.routes);
 
-    app.listen(PORT, || {
+    app.listen(PORT, async || {
         let local_ip = local_ip().unwrap();
         info!("🚀 Server running!");
         info!("📍 Local:   http://localhost:{PORT}/");

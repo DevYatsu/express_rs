@@ -46,12 +46,19 @@ impl App {
         self.router.use_with(middleware);
     }
 
-    pub async fn listen<T: FnOnce()>(self, port: u16, callback: T) {
+    pub async fn listen<T, Fut>(self, port: u16, callback: T)
+    where
+        Self: Sized + Send + Sync + 'static,
+        T: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         use hyper::service::service_fn;
 
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
 
         let app = std::sync::Arc::new(self);
+
+        callback().await;
 
         let handler_factory = {
             let app = app.clone();
@@ -60,30 +67,28 @@ impl App {
                 service_fn(move |req| {
                     let app = app.clone();
                     async move {
-                        if cfg!(debug_assertions) {
-                            let start = Instant::now();
+                        #[cfg(debug_assertions)]
+                        let start = Instant::now();
+                        #[cfg(debug_assertions)]
+                        let method = req.method().clone();
+                        #[cfg(debug_assertions)]
+                        let path = req.uri().path().to_string();
 
-                            let method = req.method().clone();
-                            let path = req.uri().path().to_string();
+                        let app = App::owned_or_cloned(app);
+                        let response = app.call(req).await;
 
-                            let app = App::owned_or_cloned(app);
-                            let response = app.call(req).await;
-
+                        #[cfg(debug_assertions)]
+                        {
                             let elapsed = start.elapsed();
 
                             info!("{} {} ({} ms)", method, path, elapsed.as_millis());
-
-                            response
-                        } else {
-                            let app = App::owned_or_cloned(app);
-                            app.call(req).await
                         }
+
+                        response
                     }
                 })
             }
         };
-
-        callback();
 
         if let Err(e) = Server::bind(addr, handler_factory).await {
             eprintln!("server error: {}", e);
