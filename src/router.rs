@@ -98,7 +98,7 @@ impl Router {
         self
     }
 
-    pub fn handle(&self, req: &mut Request, res: &mut Response) {
+    pub async fn handle<'a>(&'a self, req: &'a mut Request, res: &'a mut Response) -> () {
         let path = req.uri().path();
         let method = &MethodKind::from_hyper(req.method());
 
@@ -121,7 +121,7 @@ impl Router {
                 } else {
                     res.status_code(405).unwrap().send("Method Not Allowed");
                 }
-                return;
+                return ();
             }
         };
 
@@ -151,7 +151,7 @@ impl Router {
                 404 => "Not Found",
                 _ => "Method Not Allowed",
             });
-            return;
+            return ();
         }
 
         // sort and dedup
@@ -165,7 +165,7 @@ impl Router {
 
             if layer.route.is_none() {
                 let (called_next, next_signal) = Self::create_next();
-                layer.handle_request(req, res, next_signal);
+                layer.handle_request(req, res, next_signal).await;
 
                 if !called_next.load(Ordering::Relaxed) {
                     return;
@@ -183,7 +183,7 @@ impl Router {
 
             for route_layer in &route.stack {
                 let (called_next, next_signal) = Self::create_next();
-                route_layer.handle_request(req, res, next_signal);
+                route_layer.handle_request(req, res, next_signal).await;
 
                 if !called_next.load(Ordering::Relaxed) {
                     return;
@@ -194,6 +194,8 @@ impl Router {
         if !path_method_matched {
             res.status_code(405).unwrap().send("Method Not Allowed");
         }
+
+        return;
     }
 
     #[inline(always)]

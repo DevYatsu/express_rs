@@ -1,5 +1,5 @@
+use crate::handler::Response as ExpressResponse;
 use crate::handler::response::error::ResponseError;
-use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
 use crate::router::{Middleware, Router};
 use crate::server::Server;
 use std::convert::Infallible;
@@ -34,8 +34,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
-        self.router.handle(req, res);
+    async fn handle<'a>(&'a self, req: &'a mut Request<Incoming>, res: &'a mut ExpressResponse) {
+        self.router.handle(req, res).await
     }
 
     fn owned_or_cloned(self: Arc<Self>) -> Self {
@@ -91,6 +91,7 @@ impl App {
     }
 }
 
+use crate::handler::Handler;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::service::Service;
 use hyper::{Request, Response};
@@ -102,16 +103,17 @@ impl Service<Request<Incoming>> for App {
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, mut req: Request<Incoming>) -> Self::Future {
-        let mut response_builder = ExpressResponse::default();
-        self.handle(&mut req, &mut response_builder);
+        let handler = self.clone();
 
-        let response = response_builder.into_hyper();
+        let fut = async move {
+            let mut res = ExpressResponse::default();
+            handler.handle(&mut req, &mut res).await;
+            Ok(res.into_hyper())
+        };
 
-        Box::pin(async move { Ok(response) })
+        Box::pin(fut)
     }
 }
-
-use crate::handler::Handler;
 
 macro_rules! generate_methods {
     (

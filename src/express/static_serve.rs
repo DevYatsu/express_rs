@@ -19,6 +19,8 @@ impl Middleware for StaticServeMiddleware {
             if let Err(_) = res.send_file(&file_path) {
                 next();
             }
+
+            async {}
         }
     }
 }
