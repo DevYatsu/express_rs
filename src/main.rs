@@ -15,7 +15,7 @@ use serde_json::json;
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    const PORT: u16 = 8080;
+    const PORT: u16 = 9000;
     let mut app = app();
 
     app.use_with(StaticServeMiddleware("src"));
@@ -50,57 +50,59 @@ async fn main() {
             .unwrap()
             .r#type("text/html; charset=utf-8")
             .send(html);
+
+        async {};
+    }); 
+
+    app.get("/json", |_req: &mut Request, res: &mut Response, _| {
+        res.json(&json!({
+            "message": "Hello from JSON!",
+            "status": "success",
+            "version": "1.0"
+        }))
+        .unwrap();
     });
 
-    // app.get("/json", |_req: &mut Request, res: &mut Response, _| {
-    //     res.json(&json!({
-    //         "message": "Hello from JSON!",
-    //         "status": "success",
-    //         "version": "1.0"
-    //     }))
-    //     .unwrap();
-    // });
+    app.get("/redirect", |_req: &mut Request, res: &mut Response, _| {
+        res.redirect("/");
+    });
 
-    // app.get("/redirect", |_req: &mut Request, res: &mut Response, _| {
-    //     res.redirect("/");
-    // });
+    app.get("/status", |_req: &mut Request, res: &mut Response, _| {
+        res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
+    });
 
-    // app.get("/status", |_req: &mut Request, res: &mut Response, _| {
-    //     res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
-    // });
+    app.get(
+        "/status/{status}",
+        |req: &mut Request, res: &mut Response, _| {
+            res.send(format!("Status is {}", req.params().get("status").unwrap()));
+        },
+    );
 
-    // app.get(
-    //     "/status/{status}",
-    //     |req: &mut Request, res: &mut Response, _| {
-    //         res.send(format!("Status is {}", req.params().get("status").unwrap()));
-    //     },
-    // );
+    app.get("/file", |_req: &mut Request, res: &mut Response, _| {
+        res.send_file("./Cargo.lock")
+            .map_err(|_| {
+                *res = Response::internal_error();
+            })
+            .unwrap();
+    });
 
-    // app.get("/file", |_req: &mut Request, res: &mut Response, _| {
-    //     res.send_file("./Cargo.lock")
-    //         .map_err(|_| {
-    //             *res = Response::internal_error();
-    //         })
-    //         .unwrap();
-    // });
+    app.get(
+        "/hello",
+        |_req: &mut Request, res: &mut Response, next: Next| {
+            res.write("Hello, world")
+                .set(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                )
+                .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
-    // app.get(
-    //     "/hello",
-    //     |_req: &mut Request, res: &mut Response, next: Next| {
-    //         res.write("Hello, world")
-    //             .set(
-    //                 header::CACHE_CONTROL,
-    //                 HeaderValue::from_static("public, max-age=86400"),
-    //             )
-    //             .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+            next()
+        },
+    );
 
-    //         next()
-    //     },
-    // );
-
-    // app.get("/hello", |_req: &mut Request, res: &mut Response, _| {
-    //     res.write("!").end();
-    // });
+    app.get("/hello", |_req: &mut Request, res: &mut Response, _| {
+        res.write("!").end();
+    });
 
     println!("{:?}", app.router.routes);
 

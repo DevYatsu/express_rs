@@ -34,12 +34,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
-        self.router.handle(req, res);
-    }
-
-    fn owned_or_cloned(self: Arc<Self>) -> Self {
-        Arc::try_unwrap(self).unwrap_or_else(|arc| (*arc).clone())
+    pub async fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
+        self.router.handle(req, res).await
     }
 
     pub fn use_with<M: Middleware>(&mut self, middleware: M) {
@@ -54,9 +50,9 @@ impl App {
     {
         use hyper::service::service_fn;
 
-        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
 
-        let app = std::sync::Arc::new(self);
+        let app = AppService(Arc::new(self));
 
         callback().await;
 
@@ -74,7 +70,6 @@ impl App {
                         #[cfg(debug_assertions)]
                         let path = req.uri().path().to_string();
 
-                        let app = App::owned_or_cloned(app);
                         let response = app.call(req).await;
 
                         #[cfg(debug_assertions)]
@@ -101,18 +96,22 @@ use hyper::service::Service;
 use hyper::{Request, Response};
 use log::info;
 
-impl Service<Request<Incoming>> for App {
+#[derive(Clone)]
+pub struct AppService(pub Arc<App>);
+
+impl Service<Request<Incoming>> for AppService {
     type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>;
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, mut req: Request<Incoming>) -> Self::Future {
-        let mut response_builder = ExpressResponse::default();
-        self.handle(&mut req, &mut response_builder);
-
-        let response = response_builder.into_hyper();
-
-        Box::pin(async move { Ok(response) })
+        let app = Arc::clone(&self.0);
+        Box::pin(async move {
+            let mut response_builder = ExpressResponse::default();
+            app.handle(&mut req, &mut response_builder).await;
+            let response = response_builder.into_hyper();
+            Ok(response)
+        })
     }
 }
 

@@ -98,7 +98,7 @@ impl Router {
         self
     }
 
-    pub fn handle(&self, req: &mut Request, res: &mut Response) {
+    pub async fn handle(&self, req: &mut Request, res: &mut Response) {
         let path = req.uri().path();
         let method = &MethodKind::from_hyper(req.method());
 
