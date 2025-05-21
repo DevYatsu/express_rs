@@ -5,18 +5,18 @@ use futures_util::FutureExt;
 pub struct StaticServeMiddleware;
 
 impl Handler for StaticServeMiddleware {
-    fn call<'a>(
+    fn call<'a, 'b>(
         &'a self,
         req: &'a mut Request,
         res: &'a mut Response,
-        mut next: Next,
+        next: Next,
     ) -> HandlerResult<'a> {
         async move {
             let uri_path = req.uri().path();
             let file_path = format!(".{}", uri_path);
 
             if let Err(_) = res.send_file(&file_path) {
-                next();
+                next.call().await;
             }
         }
         .boxed()

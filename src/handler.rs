@@ -15,6 +15,7 @@ pub use response::Response;
 pub type HandlerResult<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// Trait for async handler abstraction.
+
 pub trait Handler: Send + Sync + 'static {
     fn call<'a>(
         &'a self,
@@ -73,7 +74,7 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     fn call<'a>(
-        &'a self,
+        &self,
         req: &'a mut Request,
         res: &'a mut Response,
         next: Next,

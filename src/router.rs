@@ -151,24 +151,20 @@ impl Router {
 
         println!("Matched layers: {:?}", matched);
 
-        let called_next = Arc::new(AtomicBool::new(false));
-        let next: Arc<dyn Fn() + Send + Sync + 'static> = {
-            let called_next = Arc::clone(&called_next);
-            Arc::new(move || {
-                called_next.store(true, Ordering::Relaxed);
-            })
-        };
+        let next = Next::new();
 
         for i in matched {
             let layer = &self.stack[*i];
+            let next_clone = next.clone();
 
             match layer {
                 Layer::Middleware { .. } => {
-                    layer.handle_request(req, res, next.clone()).await;
+                    layer.handle_request(req, res, next_clone).await;
 
-                    if !called_next.load(Ordering::Relaxed) {
+                    if next.was_called() {
                         return;
                     }
+
                     continue;
                 }
                 Layer::Route {
@@ -181,14 +177,16 @@ impl Router {
 
                     path_method_matched = true;
 
-                    layer.handle_request(req, res, next.clone()).await;
+                    layer.handle_request(req, res, next_clone).await;
 
-                    if !called_next.load(Ordering::Relaxed) {
+                    if next.was_called() {
                         return;
                     }
                 }
             };
         }
+
+        drop(next);
 
         if !path_method_matched {
             res.status_code(405).unwrap().send("Method Not Allowed");
