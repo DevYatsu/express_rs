@@ -3,7 +3,7 @@ use crate::handler::Handler;
 use hyper::Method;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Debug, Clone)]
 pub struct Route {
     pub path: String,
     pub stack: Vec<Layer>,
@@ -26,7 +26,7 @@ macro_rules! generate_methods {
     ) => {
         impl Route {
             $(
-                pub fn $method(&mut self, handler: impl Into<Handler>) -> &mut Self {
+                pub fn $method(&mut self, handler: impl Handler) -> &mut Self {
                     use std::str::FromStr;
                     use super::Layer;
                     let mut layer = Layer::new("/", handler);

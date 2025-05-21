@@ -1,3 +1,5 @@
+use std::{fmt::Debug, sync::Arc};
+
 use super::{method_flag::MethodKind, route::Route};
 use crate::handler::{Handler, Next, Request, Response};
 
@@ -9,19 +11,32 @@ pub enum LayerKind {
     ExpressInit,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct Layer {
     pub method: Option<MethodKind>,
-    pub handle: Handler,
+    pub handler: Arc<dyn Handler>,
     pub route: Option<Route>,
     pub kind: LayerKind,
     path: String,
 }
 
+impl Debug for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layer")
+            .field("method", &self.method)
+            .field("handler", &"Handler")
+            .field("route", &self.route)
+            .field("kind", &self.kind)
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+
 impl Layer {
-    pub fn new(path: impl Into<String>, handle: impl Into<Handler>) -> Self {
+    pub fn new(path: impl Into<String>, handler: impl Handler) -> Self {
         Self {
-            handle: handle.into(),
+            handler: Arc::new(handler),
             method: None,
             route: None,
             path: path.into(),
@@ -48,6 +63,6 @@ impl Layer {
     }
 
     pub async fn handle_request(&self, req: &mut Request, res: &mut Response, next: Next) {
-        self.handle.call(req, res, next).await
+        self.handler.handle(req, res, next).await
     }
 }

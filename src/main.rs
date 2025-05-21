@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use express_rs::{
     app,
     express::StaticServeMiddleware,
     handler::{Next, Request, Response, request::RequestExt},
 };
+use futures_core::future::BoxFuture;
 use hyper::{
     StatusCode,
     header::{self, HeaderValue},
@@ -11,6 +14,15 @@ use local_ip_address::local_ip;
 use log::info;
 use serde_json::json;
 
+fn wrapper<T, F>(f: F) -> Arc<dyn Fn(&mut Request, &mut Response, Next) -> BoxFuture<'static, ()>> 
+where 
+    T: Future<Output=()> + Send + 'static,
+    F: Fn(&mut Request, &mut Response, Next) -> T + 'static,
+{
+    Arc::new(move |req, res, next| Box::pin(f(req, res, next)))
+}
+
+
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -18,12 +30,12 @@ async fn main() {
     const PORT: u16 = 8080;
     let mut app = app();
 
-    app.use_with(StaticServeMiddleware("src"));
-    app.use_with(StaticServeMiddleware("css"));
-    app.use_with(StaticServeMiddleware("src"));
-    app.use_with(StaticServeMiddleware("expressjs_tests"));
+    app.use_with("src", StaticServeMiddleware);
+    app.use_with("css", StaticServeMiddleware);
+    app.use_with("src", StaticServeMiddleware);
+    app.use_with("expressjs_tests", StaticServeMiddleware);
 
-    app.get("/", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/", wrapper(async move |_req: &mut Request, res: &mut Response, _| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -51,8 +63,8 @@ async fn main() {
             .r#type("text/html; charset=utf-8")
             .send(html);
 
-        async {}
-    });
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }));
 
     app.get("/json", |_req: &mut Request, res: &mut Response, _| {
         res.json(&json!({

@@ -2,7 +2,7 @@ use self::interner::INTERNER;
 use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
 use ahash::{HashMap, HashMapExt};
 use hyper::Method;
-use layer::Layer;
+use layer::{Layer, LayerKind};
 use method_flag::MethodKind;
 use route::Route;
 use smallvec::{SmallVec, smallvec};
@@ -26,7 +26,7 @@ type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
 ///
 /// `Router` is responsible for registering route and middleware handlers,
 /// and efficiently dispatching them based on request paths and HTTP methods.
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Clone)]
 pub struct Router {
     /// All layers (routes and middleware), stored in order of registration.
     ///
@@ -48,7 +48,7 @@ impl Router {
     pub fn route(
         &mut self,
         path: impl AsRef<str>,
-        handle: impl Into<Handler>,
+        handle: impl Handler,
         method: &Method,
     ) -> &mut Route {
         let path_ref = path.as_ref();
@@ -75,9 +75,8 @@ impl Router {
         self.stack.last_mut().unwrap().route_mut().as_mut().unwrap()
     }
 
-    pub fn use_with<M: Middleware>(&mut self, middleware: M) -> &mut Self {
-        let path = middleware.target_path();
-        let path: &str = path.as_ref();
+    pub fn use_with<M: Handler>(&mut self, path: impl AsRef<str>, middleware: M) -> &mut Self {
+        let path = path.as_ref();
         let layer_index = self.stack.len();
 
         match self.middleware_matcher.at_mut(path) {
@@ -91,8 +90,8 @@ impl Router {
             }
         }
 
-        let mut layer = Layer::new(path, middleware.create_handler());
-        layer.kind = M::layer_kind();
+        let mut layer = Layer::new(path, middleware);
+        layer.kind = LayerKind::Middleware;
         self.stack.push(layer);
 
         self

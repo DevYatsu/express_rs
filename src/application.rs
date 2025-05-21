@@ -1,6 +1,6 @@
-use crate::handler::Response as ExpressResponse;
+use crate::handler::{Handler, Response as ExpressResponse};
 use crate::handler::response::error::ResponseError;
-use crate::router::{Middleware, Router};
+use crate::router::{Router};
 use crate::server::Server;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -24,7 +24,7 @@ use std::time::Instant;
 /// });
 /// app.listen(3000, || println!("Server started on port 3000")).await;
 /// ```
-#[derive(Clone, Default)]
+#[derive(Default, Clone)]
 pub struct App {
     /// The internal router responsible for matching and handling requests.
     ///
@@ -34,7 +34,7 @@ pub struct App {
 }
 
 impl App {
-    async fn handle<'a>(&'a self, req: &'a mut Request<Incoming>, res: &'a mut ExpressResponse) {
+    async fn handle<'a>(&'a self, req: &'a mut ExpressRequest, res: &'a mut ExpressResponse) {
         self.router.handle(req, res).await
     }
 
@@ -42,8 +42,11 @@ impl App {
         Arc::try_unwrap(self).unwrap_or_else(|arc| (*arc).clone())
     }
 
-    pub fn use_with<M: Middleware>(&mut self, middleware: M) {
-        self.router.use_with(middleware);
+    /// Registers a middleware function to be executed for given path.
+    ///
+    /// Can't name it `use` like expressjs method because of the name conflict with `use` keyword.
+    pub fn use_with<M: Handler>(&mut self, path: impl AsRef<str>, middleware: M) {
+        self.router.use_with(path, middleware);
     }
 
     pub async fn listen<T: FnOnce()>(self, port: u16, callback: T) {
@@ -91,7 +94,7 @@ impl App {
     }
 }
 
-use crate::handler::Handler;
+use futures_core::future::BoxFuture;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::service::Service;
 use hyper::{Request, Response};
@@ -100,10 +103,10 @@ use log::info;
 impl Service<Request<Incoming>> for App {
     type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>;
     type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn call(&self, mut req: Request<Incoming>) -> Self::Future {
-        let handler = self.clone();
+        let handler = std::sync::Arc::new(self.clone());
 
         let fut = async move {
             let mut res = ExpressResponse::default();
@@ -115,23 +118,32 @@ impl Service<Request<Incoming>> for App {
     }
 }
 
+use crate::handler::{Next, Request as ExpressRequest, HandlerFn};
+
+
 macro_rules! generate_methods {
     (
         methods: [$($method:ident),* $(,)?]
     ) => {
         impl App {
             $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handle: impl Into<Handler>) -> &mut Self {
+                pub fn $method<T, F>(&mut self, path: &'static str, handler: Arc<dyn Fn(&mut ExpressRequest, &mut ExpressResponse, Next) -> BoxFuture<'static, ()>>) -> &mut Self
+                where
+                    F: Fn(&mut ExpressRequest, &mut ExpressResponse, Next) -> T + 'static,
+                    T: Future<Output=()> + Send + 'static,                    
+                {
+            
                     use hyper::Method;
-                    let handler = handle.into();
-                    // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
-                    let route = self.router.route(path, handler.clone(), &Method::from_str(&stringify!($method).to_uppercase()).unwrap());
+                    
+                    // Create a wrapper function that boxes the future
+                    let handler = HandlerFn {f: handler};
+                    
+                    let method = Method::from_str(&stringify!($method).to_uppercase()).unwrap();
+                    let route = self.router.route(path, handler.clone(), &method);
                     route.$method(handler);
-
                     if cfg!(debug_assertions) {
                         println!("route: {:?}", route);
                     }
-
                     self
                 }
             )*

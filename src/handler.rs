@@ -1,62 +1,49 @@
-use std::fmt;
 use std::pin::Pin;
+use std::future::Future;
 use std::sync::Arc;
 
 mod next;
 pub mod request;
 pub mod response;
 
+use futures_core::future::BoxFuture;
 pub use next::Next;
 pub use request::Request;
 pub use response::Response;
 
-/// A boxed handler function type with mutable request and response.
-pub(crate) type BoxedHandlerFn = dyn Fn(&mut Request, &mut Response, Next) -> Pin<Box<dyn Future<Output = ()> + Send>>
-    + Send
-    + Sync;
+pub trait Handler: Send + Sync + 'static {
+    fn handle<'a >(
+        &self,
+        req: &'a mut Request,
+        res: &'a mut Response,
+        next: Next,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
 
-/// The core handler abstraction in express_rs.
+// HandlerFn wrapper for closures
 #[derive(Clone)]
-pub struct Handler(Arc<BoxedHandlerFn>);
+pub struct HandlerFn {
+    pub f: Arc<dyn Fn(&mut Request, &mut Response, Next) -> BoxFuture<'static, ()>> ,
+}
 
-impl Handler {
-    /// Creates a new handler from a closure or function.
-    #[inline(always)]
-    pub fn new<F, Fut>(f: F) -> Self
-    where
-        F: Fn(&mut Request, &mut Response, Next) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        Self(Arc::new(move |req, res, next| Box::pin(f(req, res, next))))
-    }
-
-    /// Calls the handler function.
-    #[inline(always)]
-    pub async fn call(&self, req: &mut Request, res: &mut Response, next: Next) {
-        (self.0)(req, res, next).await
+impl Handler for HandlerFn {
+    fn handle(
+        &self,
+        req: &mut Request,
+        res: &mut Response,
+        next: Next,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        (self.f)(req, res, next)
     }
 }
 
-impl<F, Fut> From<F> for Handler
+pub fn from_async_handler<F, Fut>(func: F) -> HandlerFn
 where
     F: Fn(&mut Request, &mut Response, Next) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    #[inline(always)]
-    fn from(f: F) -> Self {
-        Self::new(f)
+    HandlerFn {
+        f: Arc::new(move |req, res, next| Box::pin(func(req, res, next))),
     }
 }
 
-impl Default for Handler {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::new(|_, _, _| async {})
-    }
-}
-
-impl fmt::Debug for Handler {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Handler { ... }")
-    }
-}
