@@ -97,6 +97,7 @@ async fn main() {
         "/hello",
         |req: &mut Request, res: &mut Response, next: Next| {
             let path = req.uri().path();
+            #[cfg(debug_assertions)]
             info!("Request received for path: {}", path);
 
             res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
