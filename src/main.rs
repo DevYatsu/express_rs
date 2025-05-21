@@ -22,7 +22,7 @@ async fn main() {
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
     app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
 
-    app.get("/", |_req: &mut Request, res: &mut Response, next| {
+    app.get("/", |_req: &mut Request, res: &mut Response, _| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -101,7 +101,7 @@ async fn main() {
 
             res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
             next.call();
-            async move {}
+            async {}
         },
     );
 
