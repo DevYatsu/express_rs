@@ -149,6 +149,7 @@ impl Router {
 
         let mut path_method_matched = false;
 
+        #[cfg(debug_assertions)]
         println!("Matched layers: {:?}", matched);
 
         let next = Next::new();
