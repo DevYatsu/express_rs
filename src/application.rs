@@ -97,7 +97,7 @@ use hyper::{Request, Response};
 use log::info;
 
 #[derive(Clone)]
-pub struct AppService(pub Arc<App>);
+struct AppService(Arc<App>);
 
 impl Service<Request<Incoming>> for AppService {
     type Response = Response<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>;
