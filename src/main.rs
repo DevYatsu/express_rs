@@ -1,6 +1,11 @@
+use std::{collections::HashMap, time::Duration};
+
 use express_rs::{
     app,
-    express::StaticServeMiddleware,
+    express::{
+        CookieAuthMiddleware, CorsMiddleware, LoggingMiddleware, RateLimitMiddleware,
+        StaticServeMiddleware, auth::user::AuthLevel,
+    },
     handler::{Request, Response, middleware::next_fut, request::RequestExt},
 };
 use hyper::{
@@ -11,9 +16,25 @@ use local_ip_address::local_ip;
 use log::{error, info};
 use serde_json::json;
 
+fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} [{}] {}",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .chain(fern::log_file("output.log")?)
+        .apply()?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    setup_logger().unwrap();
 
     const PORT: u16 = 9000;
     let mut app = app();
@@ -21,6 +42,20 @@ async fn main() {
     app.use_with("/src/{{*p}}", StaticServeMiddleware);
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
     app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
+    app.use_with("/{*p}", CorsMiddleware::default());
+
+    let mut h = HashMap::new();
+    h.insert("/".to_owned(), AuthLevel::User);
+    h.insert("/hello".to_owned(), AuthLevel::User);
+
+    app.use_with("/{*p}", CookieAuthMiddleware::jwt_auth("secret", h));
+
+    app.use_with(
+        "/{*p}",
+        RateLimitMiddleware::new(10_000, Duration::from_secs(60)),
+    );
+    #[cfg(debug_assertions)]
+    app.use_with("/{{*p}}", LoggingMiddleware);
 
     app.get("/", async |_req: Request, mut res: Response| {
         let html = r#"
@@ -86,16 +121,8 @@ async fn main() {
         }
     });
 
-    app.use_with("/hello", |req: &mut Request, res: &mut Response| {
-        let path = req.uri().path();
-        #[cfg(debug_assertions)]
-        info!("Request received for path: {}", path);
-
+    app.use_with("/hello", |_req: &mut Request, res: &mut Response| {
         res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
-
-        let path = req.uri().path();
-        #[cfg(debug_assertions)]
-        info!("Middleware processing for path: {}", path);
 
         next_fut()
     });

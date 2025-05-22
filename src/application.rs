@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// The main application structure for `express_rs`.
 ///
@@ -40,6 +39,7 @@ impl App {
     }
 
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) {
+        info!("Adding middleware to path: {}", path.as_ref());
         self.router.use_with(path, middleware);
     }
 
@@ -64,22 +64,7 @@ impl App {
                 service_fn(move |req| {
                     let app = app.clone();
                     async move {
-                        #[cfg(debug_assertions)]
-                        let start = Instant::now();
-                        #[cfg(debug_assertions)]
-                        let method = req.method().clone();
-                        #[cfg(debug_assertions)]
-                        let path = req.uri().path().to_string();
-
                         let response = app.call(req).await;
-
-                        #[cfg(debug_assertions)]
-                        {
-                            let elapsed = start.elapsed();
-
-                            info!("{} {} ({} ms)", method, path, elapsed.as_millis());
-                        }
-
                         response
                     }
                 })
@@ -126,6 +111,8 @@ macro_rules! generate_methods {
                 pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self
                 {
                     use hyper::Method;
+                    info!("Adding {} handler to path: {}", stringify!($method), path.as_ref());
+
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
                     let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
 
