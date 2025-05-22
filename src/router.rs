@@ -1,12 +1,8 @@
 use self::interner::INTERNER;
-use crate::handler::{Handler, Next, Request, Response, request::RequestExtInternal};
+use crate::handler::{FnHandler, Middleware, Request, Response, request::RequestExtInternal};
 use ahash::{HashMap, HashMapExt};
 use layer::Layer;
 use smallvec::{SmallVec, smallvec};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 pub mod interner;
 mod layer;
@@ -43,7 +39,7 @@ impl Router {
     pub fn route(
         &mut self,
         path: impl AsRef<str>,
-        handler: impl Handler,
+        handler: impl FnHandler,
         method: MethodKind,
     ) -> &mut Layer {
         let path_ref: &str = path.as_ref();
@@ -66,7 +62,7 @@ impl Router {
         self.stack.last_mut().unwrap()
     }
 
-    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Handler) -> &mut Self {
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) -> &mut Self {
         let path = path.as_ref();
         let layer_index = self.stack.len();
 
@@ -87,7 +83,7 @@ impl Router {
         self
     }
 
-    pub async fn handle(&self, req: &mut Request, res: &mut Response) {
+    pub async fn handle(&self, mut req: Request, mut res: Response) -> Response {
         let path = req.uri().path();
         let method = &MethodKind::from_hyper(req.method());
 
@@ -110,7 +106,7 @@ impl Router {
                 } else {
                     res.status_code(405).unwrap().send("Method Not Allowed");
                 }
-                return;
+                return res;
             }
         };
 
@@ -140,32 +136,28 @@ impl Router {
                 404 => "Not Found",
                 _ => "Method Not Allowed",
             });
-            return;
+            return res;
         }
 
         // sort and dedup
         matched.sort_unstable();
         matched.dedup();
 
-        let mut path_method_matched = false;
-
         #[cfg(debug_assertions)]
         println!("Matched layers: {:?}", matched);
 
-        let next = Next::new();
-
         for i in matched {
             let layer = &self.stack[*i];
-            let next_clone = next.clone();
-            next_clone.reset();
 
             match layer {
                 Layer::Middleware { .. } => {
-                    layer.handle_request(req, res, next_clone).await;
-
-                    if !next.was_called() {
-                        return;
-                    }
+                    if layer
+                        .handle_middleware_request(&mut req, &mut res)
+                        .await
+                        .is_stop()
+                    {
+                        return res;
+                    };
 
                     continue;
                 }
@@ -177,20 +169,16 @@ impl Router {
                         continue;
                     }
 
-                    path_method_matched = true;
+                    let res = layer.handle_fn_request(req, res).await;
 
-                    layer.handle_request(req, res, next_clone).await;
-
-                    if !next.was_called() {
-                        return;
-                    }
+                    return res;
                 }
             };
         }
 
-        if !path_method_matched {
-            res.status_code(405).unwrap().send("Method Not Allowed");
-        }
+        // no route matched
+        res.status_code(405).unwrap().send("Method Not Allowed");
+        res
     }
 
     // #[inline(always)]

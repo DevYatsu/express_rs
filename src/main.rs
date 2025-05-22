@@ -1,7 +1,7 @@
 use express_rs::{
     app,
     express::StaticServeMiddleware,
-    handler::{Next, Request, Response, request::RequestExt},
+    handler::{Request, Response, middleware::next, request::RequestExt},
 };
 use hyper::{
     StatusCode,
@@ -22,7 +22,7 @@ async fn main() {
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
     app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
 
-    app.get("/", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/", async |_req: Request, mut res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -50,10 +50,10 @@ async fn main() {
             .r#type("text/html; charset=utf-8")
             .send(html);
 
-        async {}
+        res
     });
 
-    app.get("/json", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/json", async |_req: Request, mut res: Response| {
         res.json(&json!({
             "message": "Hello from JSON!",
             "status": "success",
@@ -61,71 +61,67 @@ async fn main() {
         }))
         .unwrap();
 
-        async {}
+        res
     });
 
-    app.get("/redirect", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/redirect", async |_req: Request, mut res: Response| {
         res.redirect("/");
-        async {}
+        res
     });
 
-    app.get("/status", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/status", async |_req: Request, mut res: Response| {
         res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
-        async {}
+        res
     });
 
     app.get(
         "/status/{status}",
-        |req: &mut Request, res: &mut Response, _| {
+        async |req: Request, mut res: Response| {
             res.send(format!("Status is {}", req.params().get("status").unwrap()));
 
-            async {}
+            res
         },
     );
 
-    app.get("/file", |_req: &mut Request, res: &mut Response, _| {
+    app.get("/file", async |_req: Request, mut res: Response| {
         res.send_file("./Cargo.lock")
             .map_err(|_| {
-                *res = Response::internal_error();
+                res = Response::internal_error();
             })
             .unwrap();
 
-        async {}
+        res
     });
 
-    app.use_with(
-        "/hello",
-        |req: &mut Request, res: &mut Response, next: Next| {
-            let path = req.uri().path();
-            #[cfg(debug_assertions)]
-            info!("Request received for path: {}", path);
+    app.use_with("/hello", |req: &mut Request, res: &mut Response| {
+        let path = req.uri().path();
+        #[cfg(debug_assertions)]
+        info!("Request received for path: {}", path);
 
-            res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
-            next.call();
-            async {}
-        },
-    );
+        res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
 
-    app.get(
-        "/hello",
-        |_req: &mut Request, res: &mut Response, next: Next| {
-            res.write("Hello, world")
-                .set(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=86400"),
-                )
-                .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        let path = req.uri().path();
+        #[cfg(debug_assertions)]
+        info!("Middleware processing for path: {}", path);
 
-            next.call();
+        next()
+    });
 
-            async {}
-        },
-    );
+    app.get("/hello", async |_req: Request, mut res: Response| {
+        res.write("Hello, world")
+            .set(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            )
+            .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
-    app.get("/hello", |_req: &mut Request, res: &mut Response, _| {
+        res
+    });
+
+    app.get("/hello", async |_req: Request, mut res: Response| {
         res.write("!").end();
 
-        async {}
+        res
     });
 
     println!("{:?}", app.router.routes);

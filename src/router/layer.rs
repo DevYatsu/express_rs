@@ -1,5 +1,9 @@
 use super::method::MethodKind;
-use crate::handler::{Handler, Next, Request, Response};
+use crate::handler::{
+    Request, Response,
+    fn_handler::FnHandler,
+    middleware::{self, Middleware},
+};
 use std::{fmt::Debug, sync::Arc};
 
 /// Represents a single routing or middleware layer in the application.
@@ -11,7 +15,7 @@ pub enum Layer {
         /// The path prefix that this layer matches against.
         path: String,
         /// The handler that will be invoked if this layer matches.
-        handler: Arc<dyn Handler>,
+        handler: Arc<dyn Middleware>,
     },
 
     /// A route layer that matches a method and path to a specific handler.
@@ -21,12 +25,12 @@ pub enum Layer {
         /// The HTTP method this layer responds to (None for middleware).
         method: MethodKind,
         /// The handler that will be invoked if this layer matches.
-        handler: Arc<dyn Handler>,
+        handler: Arc<dyn FnHandler>,
     },
 }
 
 impl Layer {
-    pub fn route(path: impl AsRef<str>, method: MethodKind, handle: impl Handler) -> Self {
+    pub fn route(path: impl AsRef<str>, method: MethodKind, handle: impl FnHandler) -> Self {
         Self::Route {
             path: path.as_ref().into(),
             method,
@@ -34,7 +38,7 @@ impl Layer {
         }
     }
 
-    pub fn middleware(path: impl AsRef<str>, handle: impl Handler) -> Self {
+    pub fn middleware(path: impl AsRef<str>, handle: impl Middleware) -> Self {
         Self::Middleware {
             path: path.as_ref().into(),
             handler: Arc::new(handle),
@@ -48,15 +52,36 @@ impl Layer {
         }
     }
 
-    fn handler(&self) -> &Arc<dyn Handler> {
+    fn get_middleware(&self) -> Option<&Arc<dyn Middleware>> {
         match self {
-            Layer::Middleware { handler, .. } => handler,
-            Layer::Route { handler, .. } => handler,
+            Layer::Middleware { handler, .. } => Some(handler),
+            Layer::Route { .. } => None,
         }
     }
 
-    pub async fn handle_request(&self, req: &mut Request, res: &mut Response, next: Next) {
-        self.handler().call(req, res, next).await
+    fn get_route(&self) -> Option<&Arc<dyn FnHandler>> {
+        match self {
+            Layer::Route { handler, .. } => Some(handler),
+            Layer::Middleware { .. } => None,
+        }
+    }
+
+    // TODO ADD comments to say that fn should only get called if the layer is a route and we are SURE of that
+    pub async fn handle_fn_request(&self, req: Request, res: Response) -> Response {
+        let handler = self.get_route().unwrap();
+
+        handler.call(req, res).await
+    }
+
+    // TODO ADD comments to say that fn should only get called if the layer is a middleware and we are SURE of that
+    pub async fn handle_middleware_request(
+        &self,
+        req: &mut Request,
+        res: &mut Response,
+    ) -> middleware::MiddlewareResult {
+        let handler = self.get_middleware().unwrap();
+
+        handler.call(req, res).await
     }
 }
 

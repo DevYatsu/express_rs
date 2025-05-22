@@ -1,3 +1,4 @@
+use crate::handler::middleware::Middleware;
 use crate::handler::response::error::ResponseError;
 use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
 use crate::router::Router;
@@ -34,11 +35,11 @@ pub struct App {
 }
 
 impl App {
-    pub async fn handle(&self, req: &mut ExpressRequest, res: &mut ExpressResponse) {
+    pub async fn handle(&self, req: ExpressRequest, res: ExpressResponse) -> ExpressResponse {
         self.router.handle(req, res).await
     }
 
-    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Handler) {
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) {
         self.router.use_with(path, middleware);
     }
 
@@ -104,18 +105,16 @@ impl Service<Request<Incoming>> for AppService {
     type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn call(&self, mut req: Request<Incoming>) -> Self::Future {
+    fn call(&self, req: Request<Incoming>) -> Self::Future {
         let app = Arc::clone(&self.0);
         Box::pin(async move {
-            let mut response_builder = ExpressResponse::default();
-            app.handle(&mut req, &mut response_builder).await;
-            let response = response_builder.into_hyper();
-            Ok(response)
+            let response = app.handle(req, ExpressResponse::default()).await;
+            Ok(response.into_hyper())
         })
     }
 }
 
-use crate::handler::Handler;
+use crate::handler::FnHandler;
 use crate::router::MethodKind;
 
 macro_rules! generate_methods {
@@ -124,7 +123,7 @@ macro_rules! generate_methods {
     ) => {
         impl App {
             $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl Handler) -> &mut Self {
+                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self {
                     use hyper::Method;
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
                     let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
