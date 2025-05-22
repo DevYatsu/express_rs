@@ -118,6 +118,7 @@ async fn main() {
         res
     });
 
+    // not called as the route is already defined
     app.get("/hello", async |_req: Request, mut res: Response| {
         res.write("!").end();
 
