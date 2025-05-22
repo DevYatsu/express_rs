@@ -109,11 +109,12 @@ impl Router {
             None => {
                 req.set_params(Default::default());
                 if matched.is_empty() {
-                    res.status_code(404).unwrap().send("Not Found");
+                    res.status_code(404).unwrap();
+                    return res.send_text("Not Found");
                 } else {
-                    res.status_code(405).unwrap().send("Method Not Allowed");
+                    res.status_code(405).unwrap();
+                    return res.send_text("Method Not Allowed");
                 }
-                return res;
             }
         };
 
@@ -139,11 +140,13 @@ impl Router {
 
         if matched.is_empty() {
             let status = if path_exists { 405 } else { 404 };
-            res.status_code(status).unwrap().send(match status {
+
+            res.status_code(status).unwrap();
+
+            return res.send_text(match status {
                 404 => "Not Found",
                 _ => "Method Not Allowed",
             });
-            return res;
         }
 
         // sort and dedup
@@ -184,8 +187,9 @@ impl Router {
         }
 
         // no route matched
-        res.status_code(405).unwrap().send("Method Not Allowed");
-        res
+        res.status_code(405).unwrap();
+
+        res.send_text("Method Not Allowed")
     }
 
     // #[inline(always)]

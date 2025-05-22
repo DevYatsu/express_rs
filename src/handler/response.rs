@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use error::ResponseError;
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -7,19 +6,18 @@ use hyper::{
     HeaderMap, Response as HyperResponse, StatusCode,
     body::{Body, Bytes, Frame},
     header::{
-        self, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, EXPIRES, HeaderName, HeaderValue,
-        IntoHeaderName, LINK, LOCATION, PRAGMA, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+        self, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, EXPIRES, HeaderValue,
+        IntoHeaderName, LOCATION, PRAGMA, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
         X_XSS_PROTECTION,
     },
 };
 use itoa::Buffer;
+use log::info;
 use lru::LruCache;
 use mime_guess;
 use once_cell::sync::Lazy;
-use std::{
-    collections::HashMap, fmt::Debug, num::NonZeroUsize, path::Path, pin::Pin, str::FromStr,
-    sync::Arc,
-};
+use serde::Serialize;
+use std::{num::NonZeroUsize, path::Path, pin::Pin, sync::Arc};
 use tokio::{fs::File, sync::Mutex};
 
 pub mod error;
@@ -31,7 +29,6 @@ pub mod error;
 static FILE_CACHE: Lazy<Mutex<LruCache<String, (String, Arc<Bytes>)>>> =
     Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
-#[derive(Default)]
 /// Represents an HTTP response.
 ///
 /// Supports common patterns such as sending JSON, streaming files, setting headers,
@@ -39,9 +36,16 @@ static FILE_CACHE: Lazy<Mutex<LruCache<String, (String, Arc<Bytes>)>>> =
 /// or a streaming body depending on usage.
 pub struct Response {
     status: StatusCode,
-    body: BytesMut,
+    body: ResponseBody,
     headers: HeaderMap,
-    streaming: Option<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>,
+}
+
+#[derive(Default)]
+enum ResponseBody {
+    #[default]
+    Empty,
+    Buffered(Bytes),
+    Stream(Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>),
 }
 
 /// Default security and cache-related headers injected into all responses.
@@ -63,304 +67,117 @@ const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
 });
 
 impl Response {
-    //
-    //
-    // STATIC METHODS
-    //
-    //
-
-    /// Creates a new `Response` with default headers and empty body.
+    /// Creates a new empty response with 200 OK status.
     pub fn new() -> Self {
         Self {
             status: StatusCode::OK,
-            body: BytesMut::with_capacity(512),
+            body: ResponseBody::Empty,
             headers: HeaderMap::with_capacity(8),
-            streaming: None,
         }
     }
 
-    /// 200 OK
-    pub fn ok() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::OK);
-        res
-    }
-
-    /// 201 Created
-    pub fn created() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::CREATED);
-        res
-    }
-
-    /// 204 No Content
-    pub fn no_content() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::NO_CONTENT);
-        res
-    }
-
-    /// 301 Moved Permanently
-    pub fn moved_permanently(location: &str) -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::MOVED_PERMANENTLY).location(location);
-        res
-    }
-
-    /// 302 Found (temporary redirect)
-    pub fn found(location: &str) -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::FOUND).location(location);
-        res
-    }
-
-    /// 400 Bad Request
-    pub fn bad_request() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::BAD_REQUEST);
-        res
-    }
-
-    /// 401 Unauthorized
-    pub fn unauthorized() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::UNAUTHORIZED);
-        res
-    }
-
-    /// 403 Forbidden
-    pub fn forbidden() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::FORBIDDEN);
-        res
-    }
-
-    /// 404 Not Found
-    pub fn not_found() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::NOT_FOUND);
-        res
-    }
-
-    /// 405 Method Not Allowed
-    pub fn method_not_allowed() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::METHOD_NOT_ALLOWED);
-        res
-    }
-
-    /// 413 Payload Too Large
-    pub fn payload_too_large() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::PAYLOAD_TOO_LARGE);
-        res
-    }
-
-    /// 415 Unsupported Media Type
-    pub fn unsupported_media_type() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        res
-    }
-
-    /// 500 Internal Server Error
-    pub fn internal_error() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::INTERNAL_SERVER_ERROR);
-        res
-    }
-
-    /// 502 Bad Gateway
-    pub fn bad_gateway() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::BAD_GATEWAY);
-        res
-    }
-
-    /// 503 Service Unavailable
-    pub fn service_unavailable() -> Self {
-        let mut res = Self::new();
-        res.status(StatusCode::SERVICE_UNAVAILABLE);
-        res
-    }
-
-    /// Create with any status
-    pub fn with_status(status: StatusCode) -> Self {
-        let mut res = Self::new();
-        res.status(status);
-        res
-    }
-
-    /// Creates a response with a custom status and body message.
-    pub fn with_status_and_message(status: StatusCode, message: &'static str) -> Self {
-        let mut res = Response::new();
-        res.status(status).send(message);
-        res
-    }
-
-    //
-    //
-    // BUILDER METHODS
-    //
-    //
-
-    /// Returns `true` if the response body is a streaming one.
-    pub fn is_streaming(&self) -> bool {
-        self.streaming.is_some()
-    }
-
-    /// Sets the HTTP status code.
-    pub fn status(&mut self, status: impl Into<StatusCode>) -> &mut Self {
-        self.status = status.into();
+    /// Sets the HTTP status code (mutable).
+    pub fn status(&mut self, status: StatusCode) -> &mut Self {
+        self.status = status;
         self
     }
 
-    /// Attempts to set the HTTP status code from a `u16` value.
-    ///
-    /// Returns an error if the provided code is not a valid HTTP status code
-    /// (e.g., not between 100 and 599).
-    pub fn status_code(&mut self, status: u16) -> Result<&mut Self, ResponseError> {
+    /// Sets the HTTP status code from a u16 value (mutable).
+    pub fn status_code(&mut self, code: u16) -> Result<&mut Self, ResponseError> {
         self.status =
-            StatusCode::from_u16(status).map_err(|_| ResponseError::InvalidStatusCode(status))?;
+            StatusCode::from_u16(code).map_err(|_| ResponseError::InvalidStatusCode(code))?;
         Ok(self)
     }
 
-    /// Returns the canonical reason phrase for the current status code.
-    pub fn status_text(&self) -> Option<&'static str> {
-        self.status.canonical_reason()
+    /// Sets a header value (mutable).
+    pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
+        K: IntoHeaderName,
+        V: Into<HeaderValue>,
+    {
+        self.headers.insert(key, value.into());
+        self
     }
 
-    /// Sets the status and sends the corresponding reason as body text.
-    pub fn send_status(&mut self, code: u16) -> Result<&mut Self, ResponseError> {
-        self.status_code(code)?;
-        let message = self.status_text().unwrap();
-        self.r#type("text/plain; charset=utf-8").send(message);
-
-        Ok(self)
-    }
-
-    /// Sets the `Content-Length` header.
-    pub fn content_length(&mut self, len: usize) -> &mut Self {
-        let mut buf = Buffer::new();
-        let len_str = buf.format(len);
-        if let Ok(val) = HeaderValue::from_str(len_str) {
-            self.set(header::CONTENT_LENGTH, val);
+    /// Sets multiple headers from an iterator (mutable).
+    pub fn headers<I, K, V>(&mut self, headers: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: IntoHeaderName,
+        V: Into<HeaderValue>,
+    {
+        for (key, value) in headers {
+            self.headers.insert(key, value.into());
         }
         self
     }
 
-    /// Inserts or overrides a header.
-    pub fn set<K: IntoHeaderName, V: Into<HeaderValue>>(&mut self, key: K, val: V) -> &mut Self {
-        self.headers.insert(key, val.into());
+    /// Sets the Content-Type header (mutable).
+    pub fn content_type<T: AsRef<str>>(&mut self, mime_type: T) -> &mut Self {
+        match HeaderValue::from_str(mime_type.as_ref()) {
+            Ok(val) => {
+                self.headers.insert(CONTENT_TYPE, val);
+            }
+            Err(_) => {
+                info!(
+                    "Invalid Content-Type header value: {}, error silenced",
+                    mime_type.as_ref()
+                );
+            }
+        }
         self
     }
 
-    /// Gets a header by string name.
-    pub fn get(&self, key: &str) -> Option<&HeaderValue> {
-        HeaderName::from_str(key)
-            .ok()
-            .and_then(|k| self.headers.get(&k))
-    }
-
-    /// Appends data to the response body without ending it.
-    pub fn write(&mut self, data: impl AsRef<[u8]>) -> &mut Self {
-        self.body.extend_from_slice(data.as_ref());
+    /// Sets the Location header for redirects (mutable).
+    pub fn location<T: AsRef<str>>(&mut self, url: T) -> &mut Self {
+        self.headers
+            .insert(LOCATION, sanitize_header_value(url.as_ref()));
         self
     }
 
-    /// Clears and sets the body, updates headers, and ends the response.
-    pub fn send(&mut self, data: impl AsRef<[u8]>) -> () {
-        let data = data.as_ref();
-        self.body.clear();
-        self.body.reserve(data.len());
-        self.body.extend_from_slice(data);
-
-        let mut buf = Buffer::new();
-        let len_str = buf.format(data.len());
-        self.set(
-            header::CONTENT_LENGTH,
-            HeaderValue::from_str(len_str).unwrap(),
-        );
-
-        if self.headers.get(CONTENT_TYPE).is_none() {
-            let mime = Self::infer(data);
-
-            self.r#type(mime);
-        }
-
-        if self.headers.get(CONTENT_TYPE).is_none() {
-            self.r#type(if std::str::from_utf8(data).is_ok() {
-                "text/plain; charset=utf-8"
-            } else {
-                "application/octet-stream"
-            });
-        }
+    /// Sets response body from bytes (mutable).
+    pub fn body<T: Into<Bytes>>(&mut self, data: T) -> &mut Self {
+        let bytes = data.into();
+        self.body = ResponseBody::Buffered(bytes);
+        self
     }
 
-    /// Serializes a value to JSON and sends it as the response body.
-    ///
-    /// Returns an error if the value fails to serialize.
-    /// Automatically sets the `Content-Type` to `application/json`.
-    pub fn json<T: ?Sized + serde::Serialize>(&mut self, value: &T) -> Result<(), ResponseError> {
-        let json = serde_json::to_vec(&value)?;
-        self.set(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        Ok(self.send(json))
+    /// Extends response body from bytes (mutable).
+    pub fn write<T: Into<Bytes>>(&mut self, data: T) -> &mut Self {
+        let bytes = data.into();
+        match &mut self.body {
+            ResponseBody::Buffered(existing) => {
+                *existing = [existing.as_ref(), bytes.as_ref()].concat().into();
+            }
+            _ => {
+                self.body = ResponseBody::Buffered(bytes);
+            }
+        }
+
+        self
     }
 
-    /// Sends a file from disk to the client.
-    ///
-    /// Returns an error if the file cannot be read, memory-mapped (if large),
-    /// or if header insertion fails. Content type is inferred from the file extension.
-    ///
-    /// For performance optimization, if the file size exceeds 512 KB, it is streamed to the client
-    pub async fn send_file(&mut self, path: &str) -> Result<(), ResponseError> {
-        // Check cache
-        if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path) {
-            self.r#type(mime);
-            return Ok(self.send(cached.as_ref()));
-        }
-
-        let file = File::open(path).await?;
-        let metadata = file.metadata().await?;
-
-        let extension = Path::new(path).extension().and_then(|ext| ext.to_str());
-        if extension.is_some() {
-            self.r#type(extension.unwrap());
-        }
-
-        // For large files, use a streaming response
-        if metadata.len() > 512 * 1024 {
-            let stream = tokio_util::io::ReaderStream::new(file)
-                .map(|result| result.map(Bytes::from).map_err(|e| ResponseError::from(e)));
-
-            self.status(StatusCode::OK);
-            self.stream(stream)?;
-            return Ok(());
-        }
-
-        let data = tokio::fs::read(path).await?;
-        let bytes = Arc::new(Bytes::from(data));
-
-        let mime = if extension.is_some() {
-            extension.unwrap()
-        } else {
-            Self::infer(&bytes)
-        };
-
-        FILE_CACHE
-            .lock()
-            .await
-            .put(path.to_string(), (mime.to_owned(), bytes.clone()));
-
-        self.status(StatusCode::OK);
-        Ok(self.send(&*bytes))
+    /// Sets response body from a string (mutable).
+    pub fn text<T: Into<String>>(&mut self, text: T) -> &mut Self {
+        self.content_type("text/plain; charset=utf-8");
+        self.body(text.into())
     }
 
-    /// Sets a streaming response body from a `Stream`.
-    ///
-    /// Returns an error if headers cannot be set.
-    /// The stream must yield `Bytes` or `ResponseError` values.
-    pub fn stream<S>(&mut self, stream: S) -> Result<&mut Self, ResponseError>
+    /// Sets response body from HTML string (mutable).
+    pub fn html<T: Into<String>>(&mut self, html: T) -> &mut Self {
+        self.content_type("text/html; charset=utf-8");
+        self.body(html.into())
+    }
+
+    /// Serializes data to JSON and sets as response body (mutable).
+    pub fn json<T: Serialize>(&mut self, data: &T) -> Result<&mut Self, ResponseError> {
+        let json = serde_json::to_vec(data)?;
+        self.content_type("application/json");
+        Ok(self.body(json))
+    }
+
+    /// Sets a streaming response body (mutable).
+    pub fn stream<S>(&mut self, stream: S) -> &mut Self
     where
         S: Stream<Item = Result<Bytes, ResponseError>> + Send + 'static,
     {
@@ -369,91 +186,138 @@ impl Response {
             Err(e) => Err(e),
         });
 
-        let stream_body = StreamBody::new(wrapped_stream);
-
-        self.status = StatusCode::OK;
-        self.body = BytesMut::new();
-
-        self.headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_str(Self::infer(&self.body))
-                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-        );
-
-        self.streaming = Some(Box::pin(stream_body));
-        Ok(self)
-    }
-
-    /// Sends a redirect response to the given location.
-    pub fn redirect(location: impl AsRef<str>) -> Self {
-        Response::found(location.as_ref())
-    }
-
-    /// Sets the `Location` header.
-    pub fn location(&mut self, url: impl AsRef<str>) -> &mut Self {
-        self.set(LOCATION, sanitize_header_value(url.as_ref()));
+        self.body = ResponseBody::Stream(Box::pin(StreamBody::new(wrapped_stream)));
         self
     }
 
-    /// Sets the `Content-Type` header based on MIME string or extension.
-    pub fn r#type(&mut self, mime: impl AsRef<str>) -> &mut Self {
-        let mime_str = mime.as_ref();
-        let mime_type = if mime_str.contains('/') {
-            mime_str.to_string()
-        } else {
-            mime_guess::from_ext(mime_str)
-                .first_raw()
-                .unwrap_or("application/octet-stream")
-                .to_string()
-        };
+    /// Sends a file as the response body (mutable).
+    pub async fn file<T: AsRef<str>>(&mut self, path: T) -> Result<&mut Self, ResponseError> {
+        let path_str = path.as_ref();
 
-        self.set(
-            CONTENT_TYPE,
-            HeaderValue::from_str(&mime_type)
-                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-        );
-        self
+        // Check cache first
+        if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path_str) {
+            self.content_type(mime);
+            return Ok(self.body((**cached).clone()));
+        }
+
+        let file = File::open(path_str).await?;
+        let metadata = file.metadata().await?;
+
+        // Infer content type from extension
+        let content_type = Path::new(path_str)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(|ext| mime_guess::from_ext(ext).first_raw())
+            .unwrap_or("application/octet-stream");
+
+        self.content_type(content_type);
+
+        // Stream large files, buffer small ones
+        if metadata.len() > 512 * 1024 {
+            let stream = tokio_util::io::ReaderStream::new(file)
+                .map(|result| result.map(Bytes::from).map_err(ResponseError::from));
+            Ok(self.stream(stream))
+        } else {
+            let data = tokio::fs::read(path_str).await?;
+            let bytes = Arc::new(Bytes::from(data));
+
+            // Cache the file
+            FILE_CACHE.lock().await.put(
+                path_str.to_string(),
+                (content_type.to_string(), bytes.clone()),
+            );
+
+            Ok(self.body((*bytes).clone()))
+        }
     }
 
-    /// Suggests to the client that the response should be downloaded as a file.
-    pub fn attachment(&mut self, filename: Option<&str>) -> &mut Self {
-        if let Some(name) = filename {
-            self.r#type(
-                mime_guess::from_path(name)
-                    .first_or_octet_stream()
-                    .essence_str(),
-            );
-            self.set(
-                CONTENT_DISPOSITION,
-                HeaderValue::from_str(&format!("attachment; filename=\"{}\"", name)).unwrap(),
-            );
-        } else {
-            self.set(CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
+    /// Sets Content-Disposition header for file downloads (mutable).
+    pub fn attachment<T: AsRef<str>>(&mut self, filename: Option<T>) -> &mut Self {
+        match filename {
+            Some(name) => {
+                let name_str = name.as_ref();
+                self.headers.insert(
+                    CONTENT_DISPOSITION,
+                    HeaderValue::from_str(&format!("attachment; filename=\"{}\"", name_str))
+                        .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+                );
+            }
+            None => {
+                self.headers
+                    .insert(CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
+            }
         }
         self
     }
 
-    /// Sets the `Link` header for multiple related resources.
-    pub fn links(&mut self, links: HashMap<&str, &str>) -> &mut Self {
-        let value = links
-            .into_iter()
-            .map(|(rel, url)| format!("<{}>; rel=\"{}\"", url, rel))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        if let Ok(val) = HeaderValue::from_str(&value) {
-            self.set(LINK, val);
-        }
-
-        self
+    /// Gets a header value by name.
+    pub fn get_header(&self, key: &str) -> Option<&HeaderValue> {
+        self.headers.get(key)
     }
 
-    /// Converts the response into a streaming Hyper response.
+    /// Returns the current status code.
+    pub fn get_status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// Checks if the response has a body.
+    pub fn has_body(&self) -> bool {
+        !matches!(self.body, ResponseBody::Empty)
+    }
+
+    /// Checks if the response is streaming.
+    pub fn is_streaming(&self) -> bool {
+        matches!(self.body, ResponseBody::Stream(_))
+    }
+
+    /// Converts the response into a Hyper response (consumes self).
     pub fn into_hyper(
         mut self,
     ) -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>> {
-        fn build_error_response()
-        -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>> {
+        // Add default headers
+        for (key, value) in DEFAULT_HEADERS.iter() {
+            self.headers.entry(key.clone()).or_insert(value.clone());
+        }
+
+        // Handle redirect without location
+        if self.status.is_redirection() && !self.headers.contains_key(LOCATION) {
+            self.headers.insert(LOCATION, HeaderValue::from_static("/"));
+        }
+
+        let body: Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>> = match self.body {
+            ResponseBody::Empty => Box::pin(StreamBody::new(futures_util::stream::empty())),
+            ResponseBody::Buffered(bytes) => {
+                // Set content length for buffered responses
+                let mut buf = Buffer::new();
+                let len_str = buf.format(bytes.len());
+                if let Ok(val) = HeaderValue::from_str(len_str) {
+                    self.headers.insert(header::CONTENT_LENGTH, val);
+                }
+
+                // Infer content type if not set
+                if !self.headers.contains_key(CONTENT_TYPE) {
+                    let content_type = infer_content_type(&bytes);
+                    if let Ok(val) = HeaderValue::from_str(content_type) {
+                        self.headers.insert(CONTENT_TYPE, val);
+                    }
+                }
+
+                Box::pin(StreamBody::new(futures_util::stream::once(async {
+                    Ok::<_, ResponseError>(Frame::data(bytes))
+                })))
+            }
+            ResponseBody::Stream(stream) => stream,
+        };
+
+        let mut builder = HyperResponse::builder().status(self.status);
+
+        for (key, value) in self.headers {
+            if let Some(key) = key {
+                builder = builder.header(key, value);
+            }
+        }
+
+        builder.body(body).unwrap_or_else(|_| {
             HyperResponse::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Box::pin(StreamBody::new(futures_util::stream::once(async {
@@ -465,60 +329,212 @@ impl Response {
                         Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>,
                     >)
                 .unwrap()
-        }
+        })
+    }
+}
 
-        let mut builder = HyperResponse::builder();
+impl Default for Response {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let is_redirect = self.status.is_redirection();
-        let has_location = self.headers.contains_key(header::LOCATION);
-
-        if is_redirect && !has_location {
-            self.set(header::LOCATION, HeaderValue::from_static("/"));
-        }
-
-        for (key, value) in DEFAULT_HEADERS.iter() {
-            self.headers.entry(key.clone()).or_insert(value.clone());
-        }
-
-        for (k, v) in std::mem::take(&mut self.headers) {
-            if let Some(k) = k {
-                builder = builder.header(k, v);
-            }
-        }
-
-        let status = self.status;
-        let body: Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>> =
-            if let Some(stream) = self.streaming {
-                stream
-            } else {
-                let frozen = self.body.freeze();
-                Box::pin(StreamBody::new(futures_util::stream::once(async {
-                    Ok::<_, ResponseError>(Frame::data(frozen))
-                })))
-            };
-
-        builder
-            .status(status)
-            .body(body)
-            .unwrap_or_else(|_| build_error_response())
+// Convenience constructors for common response types (consume self for direct returns)
+impl Response {
+    /// 200 OK with empty body
+    pub fn ok() -> Self {
+        Self::new()
     }
 
-    fn infer(data: &[u8]) -> &str {
-        let mime = if let Some(kind) = infer::get(data) {
-            kind.mime_type()
-        } else if std::str::from_utf8(data).is_ok() {
-            "text/plain; charset=utf-8"
-        } else {
-            "application/octet-stream"
-        };
+    /// 201 Created
+    pub fn created() -> Self {
+        Self::new().with_status(StatusCode::CREATED)
+    }
 
-        mime
+    /// 204 No Content
+    pub fn no_content() -> Self {
+        Self::new().with_status(StatusCode::NO_CONTENT)
+    }
+
+    /// 400 Bad Request
+    pub fn bad_request() -> Self {
+        Self::new().with_status(StatusCode::BAD_REQUEST)
+    }
+
+    /// 401 Unauthorized
+    pub fn unauthorized() -> Self {
+        Self::new().with_status(StatusCode::UNAUTHORIZED)
+    }
+
+    /// 403 Forbidden
+    pub fn forbidden() -> Self {
+        Self::new().with_status(StatusCode::FORBIDDEN)
+    }
+
+    /// 404 Not Found
+    pub fn not_found() -> Self {
+        Self::new().with_status(StatusCode::NOT_FOUND)
+    }
+
+    /// 500 Internal Server Error
+    pub fn internal_server_error() -> Self {
+        Self::new().with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// 302 Found (temporary redirect) - consumes self for direct return
+    pub fn redirect<T: AsRef<str>>(url: T) -> Self {
+        Self::new()
+            .with_status(StatusCode::FOUND)
+            .with_location(url)
+    }
+
+    /// 301 Moved Permanently - consumes self for direct return
+    pub fn permanent_redirect<T: AsRef<str>>(url: T) -> Self {
+        Self::new()
+            .with_status(StatusCode::MOVED_PERMANENTLY)
+            .with_location(url)
+    }
+
+    // Builder methods that consume self (for direct returns like Express.js res.send())
+
+    /// Sets status and consumes self for direct return
+    fn with_status(mut self, status: StatusCode) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// Sets location and consumes self for direct return
+    fn with_location<T: AsRef<str>>(mut self, url: T) -> Self {
+        self.headers
+            .insert(LOCATION, sanitize_header_value(url.as_ref()));
+        self
+    }
+
+    /// Returns a JSON response with 200 OK status (consumes self for direct return)
+    pub fn send_json<T: Serialize>(mut self, data: &T) -> Result<Self, ResponseError> {
+        let json = serde_json::to_vec(data)?;
+        self.headers
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        self.body = ResponseBody::Buffered(json.into());
+        Ok(self)
+    }
+
+    /// Returns a text response with 200 OK status (consumes self for direct return)
+    pub fn send_text<T: Into<String>>(mut self, text: T) -> Self {
+        self.headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+        self.body = ResponseBody::Buffered(text.into().into());
+        self
+    }
+
+    /// Returns an HTML response with 200 OK status (consumes self for direct return)
+    pub fn send_html<T: Into<String>>(mut self, html: T) -> Self {
+        self.headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        self.body = ResponseBody::Buffered(html.into().into());
+        self
+    }
+
+    /// Returns bytes response with 200 OK status (consumes self for direct return)
+    pub fn send_bytes<T: Into<Bytes>>(mut self, bytes: T) -> Self {
+        self.body = ResponseBody::Buffered(bytes.into());
+        self
+    }
+
+    /// Sends a file as response (consumes self for direct return)
+    pub async fn send_file<T: AsRef<str>>(mut self, path: T) -> Result<Self, ResponseError> {
+        let path_str = path.as_ref();
+
+        // Check cache first
+        if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path_str) {
+            self.headers.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_str(mime)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            );
+            self.body = ResponseBody::Buffered((**cached).clone());
+            return Ok(self);
+        }
+
+        let file = File::open(path_str).await?;
+        let metadata = file.metadata().await?;
+
+        // Infer content type from extension
+        let content_type = Path::new(path_str)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(|ext| mime_guess::from_ext(ext).first_raw())
+            .unwrap_or("application/octet-stream");
+
+        self.headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(content_type)
+                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        );
+
+        // Stream large files, buffer small ones
+        if metadata.len() > 512 * 1024 {
+            let stream = tokio_util::io::ReaderStream::new(file)
+                .map(|result| result.map(Bytes::from).map_err(ResponseError::from));
+            self.body = ResponseBody::Stream(Box::pin(StreamBody::new(stream.map(|r| match r {
+                Ok(bytes) => Ok(Frame::data(bytes)),
+                Err(e) => Err(e),
+            }))));
+            Ok(self)
+        } else {
+            let data = tokio::fs::read(path_str).await?;
+            let bytes = Arc::new(Bytes::from(data));
+
+            // Cache the file
+            FILE_CACHE.lock().await.put(
+                path_str.to_string(),
+                (content_type.to_string(), bytes.clone()),
+            );
+
+            self.body = ResponseBody::Buffered((*bytes).clone());
+            Ok(self)
+        }
+    }
+}
+
+// Additional convenience methods for common use cases (consume self for direct returns)
+impl Response {
+    /// Returns a JSON response with 200 OK status
+    pub fn ok_json<T: Serialize>(data: &T) -> Result<Self, ResponseError> {
+        Self::ok().send_json(data)
+    }
+
+    /// Returns a text response with 200 OK status
+    pub fn ok_text<T: Into<String>>(text: T) -> Self {
+        Self::ok().send_text(text)
+    }
+
+    /// Returns an HTML response with 200 OK status
+    pub fn ok_html<T: Into<String>>(html: T) -> Self {
+        Self::ok().send_html(html)
+    }
+
+    /// Returns a 404 Not Found with custom message
+    pub fn not_found_text<T: Into<String>>(message: T) -> Self {
+        Self::not_found().send_text(message)
+    }
+
+    /// Returns a 400 Bad Request with custom message
+    pub fn bad_request_text<T: Into<String>>(message: T) -> Self {
+        Self::bad_request().send_text(message)
+    }
+
+    /// Returns a 500 Internal Server Error with custom message
+    pub fn internal_error_text<T: Into<String>>(message: T) -> Self {
+        Self::internal_server_error().send_text(message)
     }
 }
 
 /// Sanitizes a header value by removing unsafe characters.
-///
-/// Only ASCII graphic characters and spaces are allowed. Prevents header injection attacks.
 fn sanitize_header_value(input: &str) -> HeaderValue {
     let cleaned: String = input
         .chars()
@@ -528,16 +544,49 @@ fn sanitize_header_value(input: &str) -> HeaderValue {
     HeaderValue::from_str(&cleaned).unwrap_or_else(|_| HeaderValue::from_static("/"))
 }
 
-impl Debug for Response {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Response")
-            .field("status", &self.status)
-            .field("body", &self.body)
-            .field("headers", &self.headers)
-            .finish()
+/// Infers content type from byte content.
+fn infer_content_type(data: &[u8]) -> &str {
+    if let Some(kind) = infer::get(data) {
+        kind.mime_type()
+    } else if std::str::from_utf8(data).is_ok() {
+        "text/plain; charset=utf-8"
+    } else {
+        "application/octet-stream"
     }
 }
 
+// Implement From traits for easy conversion from common types
+impl From<String> for Response {
+    fn from(text: String) -> Self {
+        Response::ok_text(text)
+    }
+}
+
+impl From<&str> for Response {
+    fn from(text: &str) -> Self {
+        Response::ok_text(text)
+    }
+}
+
+impl From<Bytes> for Response {
+    fn from(bytes: Bytes) -> Self {
+        Response::ok().send_bytes(bytes)
+    }
+}
+
+impl From<Vec<u8>> for Response {
+    fn from(bytes: Vec<u8>) -> Self {
+        Response::ok().send_bytes(bytes)
+    }
+}
+
+impl From<StatusCode> for Response {
+    fn from(status: StatusCode) -> Self {
+        Response::new().with_status(status)
+    }
+}
+
+// Error conversion
 impl From<ResponseError> for HyperResponse<String> {
     fn from(err: ResponseError) -> Self {
         let status = match err {

@@ -8,7 +8,7 @@ use hyper::{
     header::{self, HeaderValue},
 };
 use local_ip_address::local_ip;
-use log::info;
+use log::{error, info};
 use serde_json::json;
 
 #[tokio::main]
@@ -47,10 +47,9 @@ async fn main() {
 
         res.status_code(200)
             .unwrap()
-            .r#type("text/html; charset=utf-8")
-            .send(html);
+            .content_type("text/html; charset=utf-8");
 
-        res
+        res.send_html(html)
     });
 
     app.get("/json", async |_req: Request, mut res: Response| {
@@ -69,28 +68,22 @@ async fn main() {
     });
 
     app.get("/status", async |_req: Request, mut res: Response| {
-        res.status(StatusCode::BAD_REQUEST).send("400 Bad Request");
-        res
+        res.status(StatusCode::BAD_REQUEST);
+        res.send_text("400 Bad Request")
     });
 
-    app.get(
-        "/status/{status}",
-        async |req: Request, mut res: Response| {
-            res.send(format!("Status is {}", req.params().get("status").unwrap()));
+    app.get("/status/{status}", async |req: Request, res: Response| {
+        res.send_text(format!("Status is {}", req.params().get("status").unwrap()))
+    });
 
-            res
-        },
-    );
-
-    app.get("/file", async |_req: Request, mut res: Response| {
-        res.send_file("./Cargo.lock")
-            .await
-            .map_err(|_| {
-                res = Response::internal_error();
-            })
-            .unwrap();
-
-        res
+    app.get("/file", async |_req: Request, res: Response| {
+        match res.send_file("./Cargo.lock").await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Error sending file: {}", e);
+                Response::internal_server_error()
+            }
+        }
     });
 
     app.use_with("/hello", |req: &mut Request, res: &mut Response| {
@@ -98,7 +91,7 @@ async fn main() {
         #[cfg(debug_assertions)]
         info!("Request received for path: {}", path);
 
-        res.set("x-powered-by", HeaderValue::from_static("DevYatsu"));
+        res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
 
         let path = req.uri().path();
         #[cfg(debug_assertions)]
@@ -108,12 +101,12 @@ async fn main() {
     });
 
     app.get("/hello", async |_req: Request, mut res: Response| {
-        res.write("Hello, world")
-            .set(
+        res.body("Hello, world")
+            .header(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=86400"),
             )
-            .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+            .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
         res.write("!");
 
