@@ -123,16 +123,16 @@ macro_rules! generate_methods {
     ) => {
         impl App {
             $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self {
+                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self
+                {
                     use hyper::Method;
                     // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
                     let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
 
                     let route = self.router.route(path, handler, method);
 
-                    if cfg!(debug_assertions) {
-                        println!("route: {:?}", route);
-                    }
+                    #[cfg(debug_assertions)]
+                    println!("route: {:?}", route);
 
                     self
                 }

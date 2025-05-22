@@ -1,4 +1,5 @@
 use super::{Request, Response};
+use async_trait::async_trait;
 use futures_core::future::BoxFuture;
 
 pub type MiddlewareFuture<'a> = BoxFuture<'a, MiddlewareResult>;
@@ -10,9 +11,10 @@ pub enum MiddlewareResult {
 }
 
 /// Trait for middleware handlers.
+#[async_trait]
 pub trait Middleware: Send + Sync + 'static {
     /// The type of the handler that will be invoked if this middleware matches.
-    fn call<'a, 'b>(&'a self, req: &'b mut Request, res: &'b mut Response) -> MiddlewareFuture<'b>;
+    async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult;
 }
 
 pub fn next() -> MiddlewareFuture<'static> {
@@ -37,12 +39,13 @@ impl MiddlewareResult {
 }
 
 /// Blanket impl for closures or functions that match the async signature.
+#[async_trait]
 impl<F, Fut> Middleware for F
 where
-    F: for<'a> Fn(&'a mut Request, &'a mut Response) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = MiddlewareResult> + Send + 'static,
+    F: Send + Sync + 'static + for<'a> Fn(&'a mut Request, &'a mut Response) -> Fut,
+    Fut: std::future::Future<Output = MiddlewareResult> + Send + 'static,
 {
-    fn call<'a, 'b>(&'a self, req: &'b mut Request, res: &'b mut Response) -> MiddlewareFuture<'b> {
-        Box::pin((self)(req, res))
+    async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
+        (self)(req, res).await
     }
 }

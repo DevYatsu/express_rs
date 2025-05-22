@@ -64,9 +64,8 @@ async fn main() {
         res
     });
 
-    app.get("/redirect", async |_req: Request, mut res: Response| {
-        res.redirect("/");
-        res
+    app.get("/redirect", async |_req: Request, _res: Response| {
+        Response::redirect("/")
     });
 
     app.get("/status", async |_req: Request, mut res: Response| {
@@ -85,6 +84,7 @@ async fn main() {
 
     app.get("/file", async |_req: Request, mut res: Response| {
         res.send_file("./Cargo.lock")
+            .await
             .map_err(|_| {
                 res = Response::internal_error();
             })
@@ -115,12 +115,7 @@ async fn main() {
             )
             .set(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
-        res
-    });
-
-    // not called as the route is already defined
-    app.get("/hello", async |_req: Request, mut res: Response| {
-        res.write("!").end();
+        res.write("!");
 
         res
     });

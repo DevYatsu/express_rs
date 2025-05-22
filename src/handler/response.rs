@@ -17,15 +17,10 @@ use lru::LruCache;
 use mime_guess;
 use once_cell::sync::Lazy;
 use std::{
-    collections::HashMap,
-    fmt::Debug,
-    fs::{self, File},
-    num::NonZeroUsize,
-    path::Path,
-    pin::Pin,
-    str::FromStr,
-    sync::{Arc, Mutex},
+    collections::HashMap, fmt::Debug, num::NonZeroUsize, path::Path, pin::Pin, str::FromStr,
+    sync::Arc,
 };
+use tokio::{fs::File, sync::Mutex};
 
 pub mod error;
 
@@ -46,7 +41,6 @@ pub struct Response {
     status: StatusCode,
     body: BytesMut,
     headers: HeaderMap,
-    ended: bool,
     streaming: Option<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>>,
 }
 
@@ -81,7 +75,6 @@ impl Response {
             status: StatusCode::OK,
             body: BytesMut::with_capacity(512),
             headers: HeaderMap::with_capacity(8),
-            ended: false,
             streaming: None,
         }
     }
@@ -211,11 +204,6 @@ impl Response {
     //
     //
 
-    /// Returns `true` if the response has been marked as ended.
-    pub fn is_ended(&self) -> bool {
-        self.ended
-    }
-
     /// Returns `true` if the response body is a streaming one.
     pub fn is_streaming(&self) -> bool {
         self.streaming.is_some()
@@ -307,8 +295,6 @@ impl Response {
                 "application/octet-stream"
             });
         }
-
-        self.end()
     }
 
     /// Serializes a value to JSON and sends it as the response body.
@@ -327,15 +313,15 @@ impl Response {
     /// or if header insertion fails. Content type is inferred from the file extension.
     ///
     /// For performance optimization, if the file size exceeds 512 KB, it is streamed to the client
-    pub fn send_file(&mut self, path: &str) -> Result<(), ResponseError> {
+    pub async fn send_file(&mut self, path: &str) -> Result<(), ResponseError> {
         // Check cache
-        if let Some((mime, cached)) = FILE_CACHE.lock().unwrap().get(path) {
+        if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path) {
             self.r#type(mime);
             return Ok(self.send(cached.as_ref()));
         }
 
-        let file = File::open(path)?;
-        let metadata = file.metadata()?;
+        let file = File::open(path).await?;
+        let metadata = file.metadata().await?;
 
         let extension = Path::new(path).extension().and_then(|ext| ext.to_str());
         if extension.is_some() {
@@ -344,7 +330,7 @@ impl Response {
 
         // For large files, use a streaming response
         if metadata.len() > 512 * 1024 {
-            let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file))
+            let stream = tokio_util::io::ReaderStream::new(file)
                 .map(|result| result.map(Bytes::from).map_err(|e| ResponseError::from(e)));
 
             self.status(StatusCode::OK);
@@ -352,7 +338,7 @@ impl Response {
             return Ok(());
         }
 
-        let data = fs::read(path)?;
+        let data = tokio::fs::read(path).await?;
         let bytes = Arc::new(Bytes::from(data));
 
         let mime = if extension.is_some() {
@@ -363,7 +349,7 @@ impl Response {
 
         FILE_CACHE
             .lock()
-            .unwrap()
+            .await
             .put(path.to_string(), (mime.to_owned(), bytes.clone()));
 
         self.status(StatusCode::OK);
@@ -386,7 +372,6 @@ impl Response {
         let stream_body = StreamBody::new(wrapped_stream);
 
         self.status = StatusCode::OK;
-        self.ended = true;
         self.body = BytesMut::new();
 
         self.headers.insert(
@@ -399,16 +384,9 @@ impl Response {
         Ok(self)
     }
 
-    /// Marks the response as ended.
-    pub fn end(&mut self) -> () {
-        self.ended = true;
-    }
-
     /// Sends a redirect response to the given location.
-    pub fn redirect(&mut self, location: impl AsRef<str>) -> () {
-        self.status = StatusCode::FOUND; // Default 302
-        self.location(location);
-        self.end()
+    pub fn redirect(location: impl AsRef<str>) -> Self {
+        Response::found(location.as_ref())
     }
 
     /// Sets the `Location` header.
@@ -489,10 +467,6 @@ impl Response {
                 .unwrap()
         }
 
-        if !self.ended {
-            self.end();
-        }
-
         let mut builder = HyperResponse::builder();
 
         let is_redirect = self.status.is_redirection();
@@ -560,7 +534,6 @@ impl Debug for Response {
             .field("status", &self.status)
             .field("body", &self.body)
             .field("headers", &self.headers)
-            .field("ended", &self.ended)
             .finish()
     }
 }

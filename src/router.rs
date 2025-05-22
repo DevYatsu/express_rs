@@ -2,6 +2,7 @@ use self::interner::INTERNER;
 use crate::handler::{FnHandler, Middleware, Request, Response, request::RequestExtInternal};
 use ahash::{HashMap, HashMapExt};
 use layer::Layer;
+use log::warn;
 use smallvec::{SmallVec, smallvec};
 
 pub mod interner;
@@ -48,7 +49,13 @@ impl Router {
         let method_routes = self.routes.entry(method).or_default();
 
         match method_routes.at_mut(path_ref) {
-            Ok(entry) => entry.value.push(layer_index),
+            Ok(_entry) => {
+                warn!(
+                    "Route already exists for path: {}, other handlers won't be registered",
+                    path_ref
+                );
+                // entry.value.push(layer_index)
+            }
             Err(_) => {
                 method_routes
                     .insert(path_ref, smallvec![layer_index])
