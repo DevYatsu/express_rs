@@ -1,7 +1,7 @@
 use express_rs::{
     app,
     express::StaticServeMiddleware,
-    handler::{Request, Response, middleware::next, request::RequestExt},
+    handler::{Request, Response, middleware::next_fut, request::RequestExt},
 };
 use hyper::{
     StatusCode,
@@ -104,7 +104,7 @@ async fn main() {
         #[cfg(debug_assertions)]
         info!("Middleware processing for path: {}", path);
 
-        next()
+        next_fut()
     });
 
     app.get("/hello", async |_req: Request, mut res: Response| {

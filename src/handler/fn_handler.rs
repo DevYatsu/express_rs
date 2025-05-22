@@ -1,23 +1,20 @@
-use futures_core::future::BoxFuture;
-use futures_util::FutureExt;
-use std::future::Future;
-
 use super::{Request, Response};
-
-pub type HandlerFuture = BoxFuture<'static, Response>;
+use async_trait::async_trait;
 
 /// Trait for async handler abstraction.
+#[async_trait]
 pub trait FnHandler: Send + Sync + 'static {
-    fn call(&self, req: Request, response: Response) -> HandlerFuture;
+    async fn call(&self, req: Request, res: Response) -> Response;
 }
 
 /// Blanket impl for closures or functions that match the async signature.
+#[async_trait]
 impl<F, Fut> FnHandler for F
 where
     F: Fn(Request, Response) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Response> + Send + 'static,
 {
-    fn call(&self, req: Request, res: Response) -> HandlerFuture {
-        (self)(req, res).boxed()
+    async fn call(&self, req: Request, res: Response) -> Response {
+        (self)(req, res).await
     }
 }

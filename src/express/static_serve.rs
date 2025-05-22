@@ -18,10 +18,10 @@ impl Middleware for StaticServeMiddleware {
         let file_path = format!(".{}", uri_path);
 
         if let Err(_) = res.send_file(&file_path).await {
-            return next().await;
+            return next();
         }
 
         res.status_code(200).unwrap();
-        stop().await
+        stop()
     }
 }

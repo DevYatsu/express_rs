@@ -17,10 +17,17 @@ pub trait Middleware: Send + Sync + 'static {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult;
 }
 
-pub fn next() -> MiddlewareFuture<'static> {
+pub fn next() -> MiddlewareResult {
+    MiddlewareResult::Next
+}
+pub fn stop() -> MiddlewareResult {
+    MiddlewareResult::Stop
+}
+
+pub fn next_fut() -> MiddlewareFuture<'static> {
     MiddlewareResult::Next.boxed()
 }
-pub fn stop() -> MiddlewareFuture<'static> {
+pub fn stop_fut() -> MiddlewareFuture<'static> {
     MiddlewareResult::Stop.boxed()
 }
 
@@ -43,7 +50,7 @@ impl MiddlewareResult {
 impl<F, Fut> Middleware for F
 where
     F: Send + Sync + 'static + for<'a> Fn(&'a mut Request, &'a mut Response) -> Fut,
-    Fut: std::future::Future<Output = MiddlewareResult> + Send + 'static,
+    Fut: Future<Output = MiddlewareResult> + Send + 'static,
 {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
         (self)(req, res).await
