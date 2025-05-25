@@ -1,12 +1,16 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use express_rs::{
     app,
     express::{
-        CookieAuthMiddleware, CorsMiddleware, LoggingMiddleware, RateLimitMiddleware,
+        AuthMiddleware, CorsMiddleware, LoggingMiddleware, RateLimitMiddleware,
         StaticServeMiddleware, auth::user::AuthLevel,
     },
-    handler::{Request, Response, middleware::next_fut, request::RequestExt},
+    handler::{
+        Request, Response,
+        middleware::next_fut,
+        request::{RequestExt, RequestState},
+    },
 };
 use hyper::{
     StatusCode,
@@ -32,23 +36,26 @@ fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+pub struct State {}
+
 #[tokio::main]
 async fn main() {
     setup_logger().unwrap();
 
     const PORT: u16 = 9000;
-    let mut app = app();
+    let mut app = app(State {});
 
     app.use_with("/src/{{*p}}", StaticServeMiddleware);
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
     app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
     app.use_with("/{*p}", CorsMiddleware::default());
 
-    let mut h = HashMap::new();
-    h.insert("/".to_owned(), AuthLevel::User);
-    h.insert("/hello".to_owned(), AuthLevel::User);
+    // let mut h = HashMap::new();
+    // h.insert("/".to_owned(), AuthLevel::User);
+    // h.insert("/hello".to_owned(), AuthLevel::User);
 
-    app.use_with("/{*p}", CookieAuthMiddleware::jwt_auth("secret", h));
+    // app.use_with("/{*p}", AuthMiddleware::jwt_auth("secret", h));
 
     app.use_with(
         "/{*p}",
@@ -57,7 +64,7 @@ async fn main() {
     #[cfg(debug_assertions)]
     app.use_with("/{{*p}}", LoggingMiddleware);
 
-    app.get("/", async |_req: Request, mut res: Response| {
+    app.get("/", async |req: Request, mut res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -79,6 +86,8 @@ async fn main() {
         </body>
         </html>
         "#;
+
+        let state = req.get_state::<State>().await;
 
         res.status_code(200)
             .unwrap()

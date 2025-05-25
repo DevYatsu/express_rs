@@ -14,6 +14,7 @@ use crate::handler::{
 use async_trait::async_trait;
 use hyper::header::{HeaderValue, LOCATION};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 mod builder;
 pub use builder::AuthMiddlewareBuilder;

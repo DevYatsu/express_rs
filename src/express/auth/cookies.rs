@@ -11,28 +11,29 @@ use hyper::header::COOKIE;
 pub struct CookieHandler;
 
 impl CookieHandler {
-    /// Extracts a specific cookie value from the request using cookie crate
+    /// Extracts a specific cookie value from the request using cookie crate    
     pub fn get_cookie_value(req: &Request, cookie_name: &str) -> AuthResult<Option<String>> {
         let mut jar = CookieJar::new();
-        let headers = req.headers();
 
-        // Parse all cookie headers
-        for cookie_header in headers.get_all(COOKIE) {
-            let cookie_str = cookie_header
-                .to_str()
-                .map_err(|_| AuthError::MalformedCookie)?;
+        // if let Some(cookie_header) = req.headers().get(COOKIE) {
+        //     // Fully extract the string to avoid returning a reference to `req`
+        //     let cookie_str = cookie_header
+        //         .to_str()
+        //         .map_err(|_| AuthError::MalformedCookie)?
+        //         .to_owned(); // clone the string
 
-            // Parse each cookie in the header
-            for cookie_str in cookie_str.split(';') {
-                let cookie_str = cookie_str.trim();
-                if !cookie_str.is_empty() {
-                    match Cookie::parse(cookie_str) {
-                        Ok(cookie) => jar.add_original(cookie),
-                        Err(_) => continue, // Skip malformed individual cookies
-                    }
-                }
-            }
-        }
+        //     let parts: Vec<String> = cookie_str
+        //         .split(';')
+        //         .map(|s| s.trim().to_string())
+        //         .collect();
+        //     for cookie in parts {
+        //         if !cookie.is_empty() {
+        //             if let Ok(parsed) = Cookie::parse(&cookie) {
+        //                 jar.add_original(parsed);
+        //             }
+        //         }
+        //     }
+        // }
 
         Ok(jar
             .get(cookie_name)
@@ -43,21 +44,21 @@ impl CookieHandler {
     pub fn get_all_cookies(req: &Request) -> AuthResult<CookieJar> {
         let mut jar = CookieJar::new();
 
-        for cookie_header in req.headers().get_all(COOKIE) {
-            let cookie_str = cookie_header
-                .to_str()
-                .map_err(|_| AuthError::MalformedCookie)?;
+        // for cookie_header in req.headers().get_all(COOKIE) {
+        //     let cookie_str = cookie_header
+        //         .to_str()
+        //         .map_err(|_| AuthError::MalformedCookie)?;
 
-            for cookie_str in cookie_str.split(';') {
-                let cookie_str = cookie_str.trim();
-                if !cookie_str.is_empty() {
-                    match Cookie::parse(cookie_str) {
-                        Ok(cookie) => jar.add_original(cookie),
-                        Err(_) => continue,
-                    }
-                }
-            }
-        }
+        //     for cookie_str in cookie_str.split(';') {
+        //         let cookie_str = cookie_str.trim();
+        //         if !cookie_str.is_empty() {
+        //             match Cookie::parse(cookie_str) {
+        //                 Ok(cookie) => jar.add_original(cookie),
+        //                 Err(_) => continue,
+        //             }
+        //         }
+        //     }
+        // }
 
         Ok(jar)
     }
