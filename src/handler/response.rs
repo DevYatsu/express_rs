@@ -1,15 +1,9 @@
 use error::ResponseError;
-use futures_core::Stream;
-use futures_util::StreamExt;
-use http_body_util::StreamBody;
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{
-    HeaderMap, Response as HyperResponse, StatusCode,
-    body::{Body, Bytes, Frame},
-    header::{
-        self, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, EXPIRES, HeaderValue,
-        IntoHeaderName, LOCATION, PRAGMA, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-        X_XSS_PROTECTION,
-    },
+    body::{ Bytes}, header::{
+         HeaderValue, IntoHeaderName, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, EXPIRES, LOCATION, PRAGMA, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION
+    }, HeaderMap, Response as HyperResponse, StatusCode
 };
 use itoa::Buffer;
 use log::info;
@@ -17,8 +11,8 @@ use lru::LruCache;
 use mime_guess;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::{num::NonZeroUsize, path::Path, pin::Pin, sync::Arc};
-use tokio::{fs::File, sync::Mutex};
+use std::{num::NonZeroUsize, path::Path, sync::Arc};
+use tokio::{fs::File, io::AsyncReadExt, sync::Mutex};
 
 pub mod error;
 
@@ -45,7 +39,6 @@ enum ResponseBody {
     #[default]
     Empty,
     Buffered(Bytes),
-    Stream(Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>),
 }
 
 /// Default security and cache-related headers injected into all responses.
@@ -176,20 +169,6 @@ impl Response {
         Ok(self.body(json))
     }
 
-    /// Sets a streaming response body (mutable).
-    pub fn stream<S>(&mut self, stream: S) -> &mut Self
-    where
-        S: Stream<Item = Result<Bytes, ResponseError>> + Send + 'static,
-    {
-        let wrapped_stream = stream.map(|r| match r {
-            Ok(bytes) => Ok(Frame::data(bytes)),
-            Err(e) => Err(e),
-        });
-
-        self.body = ResponseBody::Stream(Box::pin(StreamBody::new(wrapped_stream)));
-        self
-    }
-
     /// Sends a file as the response body (mutable).
     pub async fn file<T: AsRef<str>>(&mut self, path: T) -> Result<&mut Self, ResponseError> {
         let path_str = path.as_ref();
@@ -212,23 +191,21 @@ impl Response {
 
         self.content_type(content_type);
 
-        // Stream large files, buffer small ones
-        if metadata.len() > 512 * 1024 {
-            let stream = tokio_util::io::ReaderStream::new(file)
-                .map(|result| result.map(Bytes::from).map_err(ResponseError::from));
-            Ok(self.stream(stream))
-        } else {
-            let data = tokio::fs::read(path_str).await?;
-            let bytes = Arc::new(Bytes::from(data));
+        let data = tokio::fs::read(path_str).await?;
+        let bytes = Arc::new(Bytes::from(data));
 
+        // buffer small files
+        if metadata.len() < 512 * 1024 {
             // Cache the file
             FILE_CACHE.lock().await.put(
                 path_str.to_string(),
                 (content_type.to_string(), bytes.clone()),
             );
 
-            Ok(self.body((*bytes).clone()))
         }
+
+        Ok(self.body((*bytes).clone()))
+
     }
 
     /// Sets Content-Disposition header for file downloads (mutable).
@@ -265,72 +242,63 @@ impl Response {
         !matches!(self.body, ResponseBody::Empty)
     }
 
-    /// Checks if the response is streaming.
-    pub fn is_streaming(&self) -> bool {
-        matches!(self.body, ResponseBody::Stream(_))
-    }
-
     /// Converts the response into a Hyper response (consumes self).
-    pub fn into_hyper(
-        mut self,
-    ) -> HyperResponse<Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>>> {
+    pub fn into_hyper(self) -> hyper::Response<http_body_util::Full<hyper::body::Bytes>> {
+        let mut headers = self.headers;
+        let status = self.status;
+
         // Add default headers
         for (key, value) in DEFAULT_HEADERS.iter() {
-            self.headers.entry(key.clone()).or_insert(value.clone());
+            headers.entry(key.clone()).or_insert(value.clone());
         }
 
         // Handle redirect without location
-        if self.status.is_redirection() && !self.headers.contains_key(LOCATION) {
-            self.headers.insert(LOCATION, HeaderValue::from_static("/"));
+        if status.is_redirection() && !headers.contains_key(LOCATION) {
+            headers.insert(LOCATION, HeaderValue::from_static("/"));
         }
 
-        let body: Pin<Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>> = match self.body {
-            ResponseBody::Empty => Box::pin(StreamBody::new(futures_util::stream::empty())),
+        let body = match self.body {
+            ResponseBody::Empty => {
+                Full::new(Bytes::new())
+            }
             ResponseBody::Buffered(bytes) => {
                 // Set content length for buffered responses
                 let mut buf = Buffer::new();
                 let len_str = buf.format(bytes.len());
                 if let Ok(val) = HeaderValue::from_str(len_str) {
-                    self.headers.insert(header::CONTENT_LENGTH, val);
+                    headers.insert(CONTENT_LENGTH, val);
                 }
 
                 // Infer content type if not set
-                if !self.headers.contains_key(CONTENT_TYPE) {
+                if !headers.contains_key(CONTENT_TYPE) {
                     let content_type = infer_content_type(&bytes);
                     if let Ok(val) = HeaderValue::from_str(content_type) {
-                        self.headers.insert(CONTENT_TYPE, val);
+                        headers.insert(CONTENT_TYPE, val);
                     }
                 }
 
-                Box::pin(StreamBody::new(futures_util::stream::once(async {
-                    Ok::<_, ResponseError>(Frame::data(bytes))
-                })))
+                Full::new(bytes)
             }
-            ResponseBody::Stream(stream) => stream,
         };
 
-        let mut builder = HyperResponse::builder().status(self.status);
+        let mut builder = HyperResponse::builder().status(status);
 
-        for (key, value) in self.headers {
+        for (key, value) in headers {
             if let Some(key) = key {
                 builder = builder.header(key, value);
             }
         }
 
-        builder.body(body).unwrap_or_else(|_| {
-            HyperResponse::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Box::pin(StreamBody::new(futures_util::stream::once(async {
-                    Ok::<_, ResponseError>(Frame::data(Bytes::from_static(
-                        b"Internal Server Error",
-                    )))
-                })))
-                    as Pin<
-                        Box<dyn Body<Data = Bytes, Error = ResponseError> + Send>,
-                    >)
-                .unwrap()
-        })
+        builder
+            .body(body)
+            .unwrap_or_else(|_| {
+                HyperResponse::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Full::new(Bytes::from_static(b"Internal Server Error")))
+                    .unwrap()
+            })
     }
+
 }
 
 impl Default for Response {
@@ -445,60 +413,69 @@ impl Response {
         self
     }
 
-    /// Sends a file as response (consumes self for direct return)
-    pub async fn send_file<T: AsRef<str>>(mut self, path: T) -> Result<Self, ResponseError> {
-        let path_str = path.as_ref();
 
-        // Check cache first
-        if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path_str) {
-            self.headers.insert(
-                CONTENT_TYPE,
-                HeaderValue::from_str(mime)
-                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-            );
-            self.body = ResponseBody::Buffered((**cached).clone());
-            return Ok(self);
-        }
+/// Sends a file as response (consumes self for direct return)
+pub async fn send_file<T: AsRef<str>>(mut self, path: T) -> Result<Self, ResponseError> {
+    let path_str = path.as_ref();
 
-        let file = File::open(path_str).await?;
-        let metadata = file.metadata().await?;
-
-        // Infer content type from extension
-        let content_type = Path::new(path_str)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(|ext| mime_guess::from_ext(ext).first_raw())
-            .unwrap_or("application/octet-stream");
-
+    // Check cache first
+    if let Some((mime, cached)) = FILE_CACHE.lock().await.get(path_str) {
         self.headers.insert(
             CONTENT_TYPE,
-            HeaderValue::from_str(content_type)
+            HeaderValue::from_str(mime)
                 .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
         );
-
-        // Stream large files, buffer small ones
-        if metadata.len() > 512 * 1024 {
-            let stream = tokio_util::io::ReaderStream::new(file)
-                .map(|result| result.map(Bytes::from).map_err(ResponseError::from));
-            self.body = ResponseBody::Stream(Box::pin(StreamBody::new(stream.map(|r| match r {
-                Ok(bytes) => Ok(Frame::data(bytes)),
-                Err(e) => Err(e),
-            }))));
-            Ok(self)
-        } else {
-            let data = tokio::fs::read(path_str).await?;
-            let bytes = Arc::new(Bytes::from(data));
-
-            // Cache the file
-            FILE_CACHE.lock().await.put(
-                path_str.to_string(),
-                (content_type.to_string(), bytes.clone()),
-            );
-
-            self.body = ResponseBody::Buffered((*bytes).clone());
-            Ok(self)
-        }
+        self.headers.insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&cached.len().to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        self.body = ResponseBody::Buffered((**cached).clone());
+        return Ok(self);
     }
+
+    let mut file = File::open(path_str).await?;
+    let metadata = file.metadata().await?;
+
+    let content_type = Path::new(path_str)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| mime_guess::from_ext(ext).first_raw())
+        .unwrap_or("application/octet-stream");
+
+    self.headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+
+    self.headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&metadata.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
+    // Cache and buffer small files
+    if metadata.len() < 512 * 1024 {
+        let mut buf = vec![0u8; metadata.len() as usize];
+        file.read_exact(&mut buf).await?;
+        let bytes = Arc::new(Bytes::from(buf));
+
+        FILE_CACHE.lock().await.put(
+            path_str.to_string(),
+            (content_type.to_string(), bytes.clone()),
+        );
+
+        self.body = ResponseBody::Buffered((*bytes).clone());
+    } else {
+        // ❗ Optionally: implement ResponseBody::Stream variant for real streaming
+        let mut buf = vec![0u8; metadata.len() as usize];
+        file.read_exact(&mut buf).await?;
+        self.body = ResponseBody::Buffered(Bytes::from(buf));
+    }
+
+    Ok(self)
+}
 }
 
 // Additional convenience methods for common use cases (consume self for direct returns)

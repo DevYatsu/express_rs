@@ -19,7 +19,7 @@ pub use rate_limit::RateLimitMiddleware;
 pub use security_headers::SecurityHeadersMiddleware;
 pub use static_serve::StaticServeMiddleware;
 
-pub fn app<S: Clone + Sync + Send + 'static>(state: S) -> App<S> {
+pub fn app<S: Sync + Send + 'static>(state: S) -> App<S> {
     App::with_state(state)
 }
 

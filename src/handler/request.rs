@@ -3,7 +3,7 @@ use ahash::HashMap;
 use async_trait::async_trait;
 use hyper::{Request as HRequest, body::Incoming};
 use std::sync::Arc;
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::RwLock;
 
 /// Aliased request type for the framework.
 ///
@@ -82,30 +82,22 @@ impl RequestExtInternal for Request {
 
 #[async_trait]
 pub trait RequestState {
-    async fn get_state<S: Clone + Sync + Send + 'static>(&self) -> RwLockReadGuard<'_, S>;
-    async fn get_state_mut<S: Clone + Sync + Send + 'static>(&self) -> RwLockWriteGuard<'_, S>;
-    fn set_state<S: Clone + Sync + Send + 'static>(&mut self, state: S);
+    async fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S>;
+    fn set_state<S: Sync + Send + 'static>(&mut self, state: S);
 }
 
 #[async_trait]
 impl RequestState for Request {
-    async fn get_state<S: Clone + Sync + Send + 'static>(&self) -> RwLockReadGuard<'_, S> {
+    async fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S> {
         let arc = self
             .extensions()
-            .get::<Arc<RwLock<S>>>()
+            .get::<Arc<S>>()
             .expect("State must be set before accessing it");
-        arc.read().await
+
+        arc
     }
 
-    async fn get_state_mut<S: Clone + Sync + Send + 'static>(&self) -> RwLockWriteGuard<'_, S> {
-        let arc = self
-            .extensions()
-            .get::<Arc<RwLock<S>>>()
-            .expect("State must be set before accessing it");
-        arc.write().await
-    }
-
-    fn set_state<S: Clone + Sync + Send + 'static>(&mut self, state: S) {
+    fn set_state<S: Sync + Send + 'static>(&mut self, state: S) {
         self.extensions_mut().insert(Arc::new(RwLock::new(state)));
     }
 }

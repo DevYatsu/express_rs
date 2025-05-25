@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::atomic::{AtomicU32, AtomicU64, Ordering}, time::Duration};
 
 use express_rs::{
     app,
@@ -36,15 +36,17 @@ fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-pub struct State {}
+#[derive(Debug, Default)]
+pub struct State {
+    request_count: AtomicU32,
+}
 
 #[tokio::main]
 async fn main() {
     setup_logger().unwrap();
 
     const PORT: u16 = 9000;
-    let mut app = app(State {});
+    let mut app = app(State::default());
 
     app.use_with("/src/{{*p}}", StaticServeMiddleware);
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
@@ -57,10 +59,10 @@ async fn main() {
 
     // app.use_with("/{*p}", AuthMiddleware::jwt_auth("secret", h));
 
-    app.use_with(
-        "/{*p}",
-        RateLimitMiddleware::new(10_000, Duration::from_secs(60)),
-    );
+    // app.use_with(
+    //     "/{*p}",
+    //     RateLimitMiddleware::new(10_000, Duration::from_secs(60)),
+    // );
     #[cfg(debug_assertions)]
     app.use_with("/{{*p}}", LoggingMiddleware);
 
@@ -87,13 +89,24 @@ async fn main() {
         </html>
         "#;
 
-        let state = req.get_state::<State>().await;
+        req.get_state::<State>().await.request_count.fetch_add(1, Ordering::Relaxed);
 
         res.status_code(200)
             .unwrap()
             .content_type("text/html; charset=utf-8");
 
         res.send_html(html)
+    });
+
+    app.get("/count", async |req: Request, mut res: Response| {
+        let state = req.get_state::<State>().await.request_count.load(Ordering::Relaxed);
+        res.json(&json!({
+            "request_count": state,
+            "message": "Request count retrieved successfully"
+        }))
+        .unwrap();
+
+        res
     });
 
     app.get("/json", async |_req: Request, mut res: Response| {

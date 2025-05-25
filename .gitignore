@@ -22,3 +22,5 @@ expressjs_tests/
 
 actix/
 Cargo.lock
+
+output.log
