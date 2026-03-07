@@ -2,15 +2,31 @@ use crate::{
     handler::Response,
     router::interner::{INTERNER, Symbol},
 };
-// use ahash::HashMap;
+use dashmap::DashMap;
 use hyper::{Request as HRequest, body::Incoming};
 use smallvec::SmallVec;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 /// Aliased request type for the framework.
 ///
 /// Wraps a [`hyper::Request`] using the [`Incoming`] body type for compatibility with async streams.
 pub type Request = HRequest<Incoming>;
+
+/// Wraps the client's socket address for injection into request extensions.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientAddr(pub SocketAddr);
+
+/// Wraps TLS connection status for injection into request extensions.
+#[derive(Debug, Clone, Copy)]
+pub struct TlsInfo(pub bool);
+
+/// A collection of request-scoped data, similar to Express.js `res.locals`.
+///
+/// Uses a concurrent map to allow safe sharing across async boundaries if needed,
+/// though typically accessed sequentially within the request lifecycle.
+#[derive(Debug, Clone, Default)]
+pub struct Locals(pub Arc<DashMap<String, serde_json::Value>>);
 
 /// Stores route parameters extracted from dynamic segments of a matched route.
 ///
@@ -20,8 +36,6 @@ pub struct RouteParams(pub(crate) SmallVec<[(Symbol, Symbol); 4]>);
 
 impl RouteParams {
     /// Gets the parameter value associated with the given key, if present.
-    ///
-    /// Resolves both the key and the value using the global symbol interner.
     pub fn get(&self, key: &str) -> Option<String> {
         let sym_key = INTERNER.get(key)?;
         let sym_val = self.0.iter().find(|(k, _)| *k == sym_key).map(|(_, v)| v)?;
@@ -77,12 +91,27 @@ pub trait RequestExt {
 
     /// Returns a new response object, allowing for chaining from the request.
     fn res(&self) -> Response;
+
+    /// Gets the client IP address from the request extensions.
+    fn ip(&self) -> Option<SocketAddr>;
+
+    /// Returns `true` if the request was made via XMLHttpRequest (`X-Requested-With` header).
+    fn xhr(&self) -> bool;
+
+    /// Returns `true` if the `Content-Type` matches the specified type (case-insensitive).
+    fn is(&self, content_type_to_match: &str) -> bool;
+
+    /// Returns `true` if the connection is secure (TLS).
+    fn secure(&self) -> bool;
+
+    /// Returns the request-scoped locals map.
+    fn locals(&self) -> &Locals;
 }
 
-/// Internal trait used to attach route parameters to a request during routing.
-pub(crate) trait RequestExtInternal {
-    /// Sets the [`RouteParams`] using a small sequence of parameters.
+/// Internal trait used to attach request metadata during server processing.
+pub(crate) trait RequestMetadataInternal {
     fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>);
+    fn set_metadata(&mut self, addr: SocketAddr, is_tls: bool);
 }
 
 impl RequestExt for Request {
@@ -116,20 +145,52 @@ impl RequestExt for Request {
     }
 
     fn prefers_json(&self) -> bool {
-        self.headers()
-            .get(hyper::header::ACCEPT)
-            .and_then(|v| v.to_str().ok())
+        self.get_header("accept")
             .is_none_or(|accept| accept.contains("application/json"))
     }
 
     fn res(&self) -> Response {
         Response::new()
     }
+
+    fn ip(&self) -> Option<SocketAddr> {
+        self.extensions().get::<ClientAddr>().map(|c| c.0)
+    }
+
+    fn xhr(&self) -> bool {
+        self.get_header("x-requested-with")
+            .is_some_and(|v| v.eq_ignore_ascii_case("xmlhttprequest"))
+    }
+
+    fn is(&self, content_type_to_match: &str) -> bool {
+        self.get_header("content-type").is_some_and(|v| {
+            v.to_lowercase()
+                .contains(&content_type_to_match.to_lowercase())
+        })
+    }
+
+    fn secure(&self) -> bool {
+        self.extensions().get::<TlsInfo>().is_some_and(|t| t.0)
+    }
+
+    fn locals(&self) -> &Locals {
+        if self.extensions().get::<Locals>().is_none() {
+            // This is a bit tricky since we need &self and want to insert if missing.
+            // Normally locals would be initialized at the start of the request handling.
+            panic!("Locals must be initialized at the start of the request lifecycle");
+        }
+        self.extensions().get::<Locals>().unwrap()
+    }
 }
 
-impl RequestExtInternal for Request {
+impl RequestMetadataInternal for Request {
     fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>) {
         self.extensions_mut().insert(RouteParams(params));
+    }
+
+    fn set_metadata(&mut self, addr: SocketAddr, is_tls: bool) {
+        self.extensions_mut().insert(ClientAddr(addr));
+        self.extensions_mut().insert(TlsInfo(is_tls));
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::handler::FnHandler;
 use crate::handler::{Middleware, Request as ExpressRequest, Response as ExpressResponse};
-use crate::router::{MethodKind, Router};
+use crate::router::{MethodKind, Route, Router};
 use crate::server::Server;
 use log::info;
 use std::net::SocketAddr;
@@ -56,12 +56,23 @@ impl<S: Sync + Send + 'static> App<S> {
     /// Creates a new `App` instance with an empty router.
     pub async fn handle(&self, mut req: ExpressRequest, res: ExpressResponse) -> ExpressResponse {
         req.extensions_mut().insert(self.state.clone());
+        req.extensions_mut()
+            .insert(crate::handler::request::Locals::default());
         self.router.handle(req, res).await
     }
 
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) {
         info!("Adding middleware to path: {}", path.as_ref());
         self.router.use_with(path, middleware);
+    }
+
+    pub fn all(&mut self, path: impl AsRef<str>, handler: impl FnHandler + Clone) -> &mut Self {
+        self.router.all(path, handler);
+        self
+    }
+
+    pub fn route(&mut self, path: impl Into<String>) -> Route<'_> {
+        self.router.route_builder(path)
     }
 
     crate::define_methods!();
@@ -86,12 +97,14 @@ impl<S: Sync + Send + 'static> App<S> {
         let app = Arc::new(self);
         callback().await;
 
-        let factory = move || {
+        let factory = move |addr: SocketAddr| {
             let app = app.clone();
-            hyper::service::service_fn(move |req| {
+            hyper::service::service_fn(move |mut req| {
                 let app = app.clone();
+                use crate::handler::request::RequestMetadataInternal;
+                req.set_metadata(addr, false);
                 async move {
-                    let response = app.router.handle(req, ExpressResponse::default()).await;
+                    let response = app.handle(req, ExpressResponse::default()).await;
                     Ok::<_, std::convert::Infallible>(response.into_hyper())
                 }
             })
@@ -112,12 +125,14 @@ impl<S: Sync + Send + 'static> App<S> {
         let app = Arc::new(self);
         callback().await;
 
-        let factory = move || {
+        let factory = move |addr: SocketAddr| {
             let app = app.clone();
-            hyper::service::service_fn(move |req| {
+            hyper::service::service_fn(move |mut req| {
                 let app = app.clone();
+                use crate::handler::request::RequestMetadataInternal;
+                req.set_metadata(addr, true);
                 async move {
-                    let response = app.router.handle(req, ExpressResponse::default()).await;
+                    let response = app.handle(req, ExpressResponse::default()).await;
                     Ok::<_, std::convert::Infallible>(response.into_hyper())
                 }
             })

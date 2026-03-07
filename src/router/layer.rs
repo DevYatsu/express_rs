@@ -42,21 +42,21 @@ impl Layer {
         }
     }
 
-    pub fn path(&self) -> &str {
+    pub const fn path(&self) -> &str {
         match self {
-            Layer::Middleware { path, .. } => path,
-            Layer::Route { path, .. } => path,
+            Layer::Middleware { path, .. } => path.as_str(),
+            Layer::Route { path, .. } => path.as_str(),
         }
     }
 
-    fn get_middleware(&self) -> Option<&Arc<dyn Middleware>> {
+    const fn get_middleware(&self) -> Option<&Arc<dyn Middleware>> {
         match self {
             Layer::Middleware { handler, .. } => Some(handler),
             Layer::Route { .. } => None,
         }
     }
 
-    fn get_route(&self) -> Option<&Arc<dyn FnHandler>> {
+    const fn get_route(&self) -> Option<&Arc<dyn FnHandler>> {
         match self {
             Layer::Route { handler, .. } => Some(handler),
             Layer::Middleware { .. } => None,

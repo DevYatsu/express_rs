@@ -23,7 +23,7 @@ impl Server {
         make_service: F,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
-        F: Fn() -> S + Send + Sync + 'static + Clone,
+        F: Fn(SocketAddr) -> S + Send + Sync + 'static + Clone,
         S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
             + Send
             + 'static,
@@ -42,7 +42,7 @@ impl Server {
         make_service: F,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
-        F: Fn() -> S + Send + Sync + 'static + Clone,
+        F: Fn(SocketAddr) -> S + Send + Sync + 'static + Clone,
         S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
             + Send
             + 'static,
@@ -66,7 +66,7 @@ impl Server {
         acceptor: A,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
-        F: Fn() -> S + Send + Sync + 'static + Clone,
+        F: Fn(SocketAddr) -> S + Send + Sync + 'static + Clone,
         S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
             + Send
             + 'static,
@@ -84,8 +84,8 @@ impl Server {
 
         loop {
             tokio::select! {
-                Ok((stream, _)) = listener.accept() => {
-                    let service = make_service();
+                Ok((stream, addr)) = listener.accept() => {
+                    let service = make_service(addr);
                     let fut = acceptor(stream);
 
                     tokio::spawn(async move {

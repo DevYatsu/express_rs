@@ -82,7 +82,6 @@ async fn main() {
             .fetch_add(1, Ordering::Relaxed);
 
         res.status_code(200)
-            .unwrap()
             .content_type("text/html; charset=utf-8")
             .send_html(html)
     })
@@ -95,7 +94,6 @@ async fn main() {
             "request_count": state,
             "message": "Request count retrieved successfully"
         }))
-        .unwrap()
     });
 
     app.get("/json", async |_req: Request, res: Response| {
@@ -104,7 +102,6 @@ async fn main() {
             "status": "success",
             "version": "1.0"
         }))
-        .unwrap()
     });
 
     app.get("/redirect", async |_req: Request, _res: Response| {
@@ -144,6 +141,16 @@ async fn main() {
             )
             .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"))
             .write("!")
+    });
+
+    // Test app.route pattern
+    app.route("/api/v1/user")
+        .get(async |_req: Request, res: Response| res.send_text("Get User"))
+        .post(async |_req: Request, res: Response| res.send_text("Post User"));
+
+    // Test app.all pattern
+    app.all("/ping", async |_req: Request, res: Response| {
+        res.send_text("pong")
     });
 
     println!("{:?}", app.router.routes);

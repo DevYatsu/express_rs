@@ -114,7 +114,7 @@ impl AuthMiddleware {
 
     /// Creates a redirect response to the login page
     fn create_redirect_response(&self, res: &mut Response) -> MiddlewareResult {
-        res.status_code(302).unwrap().header(
+        res.status_code(302).header(
             LOCATION,
             HeaderValue::from_str(&self.config.login_redirect)
                 .unwrap_or_else(|_| HeaderValue::from_static("/login")),

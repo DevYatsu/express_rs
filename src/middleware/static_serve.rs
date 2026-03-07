@@ -15,7 +15,7 @@ impl Middleware for StaticServeMiddleware {
             return next_res();
         }
 
-        res.status_code(200).unwrap();
+        res.status_code(200);
         stop_res()
     }
 }

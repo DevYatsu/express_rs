@@ -19,10 +19,10 @@ pub trait Middleware: Send + Sync + 'static {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult;
 }
 
-pub fn next_res() -> MiddlewareResult {
+pub const fn next_res() -> MiddlewareResult {
     MiddlewareResult::Next
 }
-pub fn stop_res() -> MiddlewareResult {
+pub const fn stop_res() -> MiddlewareResult {
     MiddlewareResult::Stop
 }
 
@@ -34,11 +34,11 @@ pub fn stop() -> MiddlewareFuture<'static> {
 }
 
 impl MiddlewareResult {
-    pub fn is_next(&self) -> bool {
+    pub const fn is_next(&self) -> bool {
         matches!(self, MiddlewareResult::Next)
     }
 
-    pub fn is_stop(&self) -> bool {
+    pub const fn is_stop(&self) -> bool {
         matches!(self, MiddlewareResult::Stop)
     }
 

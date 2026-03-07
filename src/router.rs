@@ -1,6 +1,6 @@
 use self::interner::INTERNER;
 use crate::handler::{
-    ExpressResponse, FnHandler, Middleware, Request, Response, request::RequestExtInternal,
+    ExpressResponse, FnHandler, Middleware, Request, Response, request::RequestMetadataInternal,
 };
 use ahash::HashMap;
 use layer::Layer;
@@ -84,6 +84,23 @@ impl Router {
         self.stack.push(route);
 
         self.stack.last_mut().unwrap()
+    }
+
+    pub fn all(&mut self, path: impl AsRef<str>, handler: impl FnHandler + Clone) -> &mut Self {
+        let path = path.as_ref();
+        for &method in &MethodKind::ALL {
+            self.route(path, handler.clone(), method);
+        }
+        self
+    }
+
+    /// Returns a `Route` object for the specified path, allowing for method chaining.
+    /// This mirrors Express.js `app.route(path)`.
+    pub fn route_builder(&mut self, path: impl Into<String>) -> Route<'_> {
+        Route {
+            router: self,
+            path: path.into(),
+        }
     }
 
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) -> &mut Self {
@@ -208,33 +225,33 @@ impl Router {
         let mut path_exists = false;
 
         if let Some(method_routes) = self.routes.get(method)
-            && let Ok(route_match) = method_routes.matcher.at(path) {
-                path_exists = true;
+            && let Ok(route_match) = method_routes.matcher.at(path)
+        {
+            path_exists = true;
 
-                if !route_match.params.is_empty() {
-                    for (k, v) in route_match.params.iter() {
-                        let sym_k = INTERNER.get_or_intern(k);
-                        let sym_v = INTERNER.get_or_intern(v);
-                        route_params.push((sym_k, sym_v));
-                    }
+            if !route_match.params.is_empty() {
+                for (k, v) in route_match.params.iter() {
+                    let sym_k = INTERNER.get_or_intern(k);
+                    let sym_v = INTERNER.get_or_intern(v);
+                    route_params.push((sym_k, sym_v));
                 }
-
-                matched.extend(method_routes.indices[*route_match.value].iter());
             }
+
+            matched.extend(method_routes.indices[*route_match.value].iter());
+        }
 
         if matched.is_empty() {
             // let's check other methods to return proper 405 or 404
             for (m, method_routes) in &self.routes {
-                if m != method
-                    && method_routes.matcher.at(path).is_ok() {
-                        path_exists = true;
-                        break;
-                    }
+                if m != method && method_routes.matcher.at(path).is_ok() {
+                    path_exists = true;
+                    break;
+                }
             }
 
             let status = if path_exists { 405 } else { 404 };
 
-            return res.status_code(status).unwrap().send_text(match status {
+            return res.status_code(status).send_text(match status {
                 404 => "Not Found",
                 _ => "Method Not Allowed",
             });
@@ -280,9 +297,7 @@ impl Router {
         }
 
         // no route matched
-        res.status_code(405)
-            .unwrap()
-            .send_text("Method Not Allowed")
+        res.status_code(405).send_text("Method Not Allowed")
     }
 }
 
@@ -346,6 +361,32 @@ macro_rules! define_methods {
             self.add_route(path, handler, $crate::router::MethodKind::Trace)
         }
     };
+    (route) => {
+        pub fn get(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Get)
+        }
+        pub fn post(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Post)
+        }
+        pub fn put(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Put)
+        }
+        pub fn delete(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Delete)
+        }
+        pub fn patch(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Patch)
+        }
+        pub fn head(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Head)
+        }
+        pub fn connect(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Connect)
+        }
+        pub fn trace(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+            self.add_route(handler, $crate::router::MethodKind::Trace)
+        }
+    };
 }
 
 impl Router {
@@ -360,4 +401,27 @@ impl Router {
         self.route(path, handler, method);
         self
     }
+}
+
+/// A route builder for a specific path, allowing for method chaining.
+/// Mirrored after Express.js `app.route(path)`.
+pub struct Route<'a> {
+    router: &'a mut Router,
+    path: String,
+}
+
+impl<'a> Route<'a> {
+    pub fn all(&mut self, handler: impl FnHandler + Clone) -> &mut Self {
+        for &method in &MethodKind::ALL {
+            self.router.route(&self.path, handler.clone(), method);
+        }
+        self
+    }
+
+    fn add_route(&mut self, handler: impl FnHandler, method: MethodKind) -> &mut Self {
+        self.router.route(&self.path, handler, method);
+        self
+    }
+
+    define_methods!(route);
 }

@@ -15,6 +15,18 @@ pub enum MethodKind {
 }
 
 impl MethodKind {
+    pub const ALL: [MethodKind; 9] = [
+        MethodKind::Get,
+        MethodKind::Post,
+        MethodKind::Put,
+        MethodKind::Delete,
+        MethodKind::Patch,
+        MethodKind::Head,
+        MethodKind::Options,
+        MethodKind::Trace,
+        MethodKind::Connect,
+    ];
+
     pub fn from_hyper(method: &hyper::Method) -> Self {
         match *method {
             Method::GET => MethodKind::Get,

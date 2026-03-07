@@ -36,6 +36,7 @@ pub struct Response {
     status: StatusCode,
     body: ResponseBody,
     headers: HeaderMap,
+    error: Option<ResponseError>,
 }
 
 #[derive(Default)]
@@ -71,7 +72,7 @@ const DEFAULT_HEADERS: Lazy<HeaderMap> = Lazy::new(|| {
 /// `Response` or a `&mut Response`.
 pub trait ExpressResponse: Sized {
     fn status(self, status: StatusCode) -> Self;
-    fn status_code(self, code: u16) -> Result<Self, ResponseError>;
+    fn status_code(self, code: u16) -> Self;
     fn header<K, V>(self, key: K, value: V) -> Self
     where
         K: IntoHeaderName,
@@ -82,7 +83,7 @@ pub trait ExpressResponse: Sized {
     fn write<T: Into<Bytes>>(self, data: T) -> Self;
     fn text<T: Into<String>>(self, text: T) -> Self;
     fn html<T: Into<String>>(self, html: T) -> Self;
-    fn json<T: Serialize>(self, data: &T) -> Result<Self, ResponseError>;
+    fn json<T: Serialize>(self, data: &T) -> Self;
     fn cookie(self, cookie: Cookie<'_>) -> Self;
 }
 
@@ -92,10 +93,12 @@ impl ExpressResponse for Response {
         self
     }
 
-    fn status_code(mut self, code: u16) -> Result<Self, ResponseError> {
-        self.status =
-            StatusCode::from_u16(code).map_err(|_| ResponseError::InvalidStatusCode(code))?;
-        Ok(self)
+    fn status_code(mut self, code: u16) -> Self {
+        match StatusCode::from_u16(code) {
+            Ok(s) => self.status = s,
+            Err(_) => self.error = Some(ResponseError::InvalidStatusCode(code)),
+        }
+        self
     }
 
     fn header<K, V>(mut self, key: K, value: V) -> Self
@@ -148,9 +151,14 @@ impl ExpressResponse for Response {
             .body(html.into())
     }
 
-    fn json<T: Serialize>(self, data: &T) -> Result<Self, ResponseError> {
-        let json = serde_json::to_vec(data)?;
-        Ok(self.content_type("application/json").body(json))
+    fn json<T: Serialize>(mut self, data: &T) -> Self {
+        match serde_json::to_vec(data) {
+            Ok(json) => self.content_type("application/json").body(json),
+            Err(e) => {
+                self.error = Some(ResponseError::JsonSerializationError(e));
+                self
+            }
+        }
     }
 
     fn cookie(mut self, cookie: Cookie<'_>) -> Self {
@@ -167,10 +175,12 @@ impl ExpressResponse for &mut Response {
         self
     }
 
-    fn status_code(self, code: u16) -> Result<Self, ResponseError> {
-        self.status =
-            StatusCode::from_u16(code).map_err(|_| ResponseError::InvalidStatusCode(code))?;
-        Ok(self)
+    fn status_code(self, code: u16) -> Self {
+        match StatusCode::from_u16(code) {
+            Ok(s) => self.status = s,
+            Err(_) => self.error = Some(ResponseError::InvalidStatusCode(code)),
+        }
+        self
     }
 
     fn header<K, V>(self, key: K, value: V) -> Self
@@ -223,9 +233,14 @@ impl ExpressResponse for &mut Response {
             .body(html.into())
     }
 
-    fn json<T: Serialize>(self, data: &T) -> Result<Self, ResponseError> {
-        let json = serde_json::to_vec(data)?;
-        Ok(self.content_type("application/json").body(json))
+    fn json<T: Serialize>(self, data: &T) -> Self {
+        match serde_json::to_vec(data) {
+            Ok(json) => self.content_type("application/json").body(json),
+            Err(e) => {
+                self.error = Some(ResponseError::JsonSerializationError(e));
+                self
+            }
+        }
     }
 
     fn cookie(self, cookie: Cookie<'_>) -> Self {
@@ -243,6 +258,7 @@ impl Response {
             status: StatusCode::OK,
             body: ResponseBody::Empty,
             headers: HeaderMap::with_capacity(8),
+            error: None,
         }
     }
 
@@ -272,13 +288,13 @@ impl Response {
         json: bool,
     ) -> &mut Self {
         if json {
-            self.content_type("application/json").json(&json_body).ok();
+            self.content_type("application/json").json(&json_body);
         } else {
             self.content_type("text/plain; charset=utf-8")
                 .body(message.to_string());
         }
 
-        self.status_code(status).ok();
+        self.status_code(status);
         self
     }
 
@@ -343,7 +359,7 @@ impl Response {
     }
 
     /// Returns the current status code.
-    pub fn get_status(&self) -> StatusCode {
+    pub const fn get_status(&self) -> StatusCode {
         self.status
     }
 
@@ -360,7 +376,7 @@ impl Response {
     }
 
     /// Checks if the response has a body.
-    pub fn has_body(&self) -> bool {
+    pub const fn has_body(&self) -> bool {
         !matches!(self.body, ResponseBody::Empty)
     }
 
@@ -509,12 +525,19 @@ impl Response {
     }
 
     /// Returns a JSON response with 200 OK status (consumes self for direct return)
-    pub fn send_json<T: Serialize>(mut self, data: &T) -> Result<Self, ResponseError> {
-        let json = serde_json::to_vec(data)?;
-        self.headers
-            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.body = ResponseBody::Buffered(json.into());
-        Ok(self)
+    pub fn send_json<T: Serialize>(mut self, data: &T) -> Self {
+        match serde_json::to_vec(data) {
+            Ok(json) => {
+                self.headers
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                self.body = ResponseBody::Buffered(json.into());
+                self
+            }
+            Err(e) => {
+                self.error = Some(ResponseError::JsonSerializationError(e));
+                self
+            }
+        }
     }
 
     /// Returns a text response with 200 OK status (consumes self for direct return)
@@ -610,7 +633,7 @@ impl Response {
 // Additional convenience methods for common use cases (consume self for direct returns)
 impl Response {
     /// Returns a JSON response with 200 OK status
-    pub fn ok_json<T: Serialize>(data: &T) -> Result<Self, ResponseError> {
+    pub fn ok_json<T: Serialize>(data: &T) -> Self {
         Self::ok().send_json(data)
     }
 
