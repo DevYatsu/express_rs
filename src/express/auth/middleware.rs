@@ -23,7 +23,7 @@ pub use builder::AuthMiddlewareBuilder;
 #[derive(Clone)]
 pub struct AuthMiddleware {
     config: CookieAuthConfig,
-    protected_routes: matchthem::Router<AuthLevel>,
+    protected_routes: matchit::Router<AuthLevel>,
     token_validator: Arc<dyn TokenValidator>,
 }
 
@@ -31,7 +31,7 @@ impl AuthMiddleware {
     /// Creates a new `AuthMiddleware` with JWT validation
     pub fn with_jwt(
         config: CookieAuthConfig,
-        protected_routes: matchthem::Router<AuthLevel>,
+        protected_routes: matchit::Router<AuthLevel>,
         jwt_validator: JwtTokenValidator,
     ) -> Self {
         Self {
@@ -44,7 +44,7 @@ impl AuthMiddleware {
     /// Creates a new `AuthMiddleware` with session validation
     pub fn with_sessions(
         config: CookieAuthConfig,
-        protected_routes: matchthem::Router<AuthLevel>,
+        protected_routes: matchit::Router<AuthLevel>,
         validator: SessionTokenValidator,
     ) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl AuthMiddleware {
     /// Creates a new `AuthMiddleware` with custom token validator
     pub fn with_validator(
         config: CookieAuthConfig,
-        protected_routes: matchthem::Router<AuthLevel>,
+        protected_routes: matchit::Router<AuthLevel>,
         validator: Arc<dyn TokenValidator>,
     ) -> Self {
         Self {
@@ -188,7 +188,7 @@ impl AuthMiddleware {
     /// Quick setup for JWT-based authentication
     pub fn jwt_auth(
         jwt_validator: JwtTokenValidator,
-        protected_routes: matchthem::Router<AuthLevel>,
+        protected_routes: matchit::Router<AuthLevel>,
     ) -> Self {
         Self::builder()
             .protect_routes(protected_routes)
@@ -198,7 +198,7 @@ impl AuthMiddleware {
     /// Quick setup for session-based authentication
     pub fn session_auth(
         sessions: SessionTokenValidator,
-        protected_routes: matchthem::Router<AuthLevel>,
+        protected_routes: matchit::Router<AuthLevel>,
     ) -> Self {
         Self::builder()
             .protect_routes(protected_routes)

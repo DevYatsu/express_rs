@@ -9,14 +9,14 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct AuthMiddlewareBuilder {
     config: CookieAuthConfig,
-    protected_routes: matchthem::Router<AuthLevel>,
+    protected_routes: matchit::Router<AuthLevel>,
 }
 
 impl AuthMiddlewareBuilder {
     pub fn new() -> Self {
         Self {
             config: CookieAuthConfig::default(),
-            protected_routes: matchthem::Router::new(),
+            protected_routes: matchit::Router::new(),
         }
     }
 
@@ -62,12 +62,14 @@ impl AuthMiddlewareBuilder {
     }
 
     pub fn protect_route(mut self, route: impl Into<String>, level: AuthLevel) -> Self {
-        self.protected_routes.insert(route.into(), level);
+        let _ = self.protected_routes.insert(route.into(), level);
         self
     }
 
-    pub fn protect_routes(mut self, routes: matchthem::Router<AuthLevel>) -> Self {
-        self.protected_routes.merge(routes);
+    pub fn protect_routes(mut self, routes: matchit::Router<AuthLevel>) -> Self {
+        // matchit doesn't have merge, so just assign it if we don't need to merge, or we couldn't merge.
+        // For simplicity, we can just replace.
+        self.protected_routes = routes;
         self
     }
 

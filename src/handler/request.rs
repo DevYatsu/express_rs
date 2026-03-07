@@ -1,5 +1,6 @@
 use crate::router::interner::{INTERNER, Symbol};
-use ahash::HashMap;
+// use ahash::HashMap;
+use smallvec::SmallVec;
 use async_trait::async_trait;
 use hyper::{Request as HRequest, body::Incoming};
 use std::sync::Arc;
@@ -14,7 +15,7 @@ pub type Request = HRequest<Incoming>;
 ///
 /// Internally maps interned symbols to other interned symbols for compact, efficient key-value storage.
 #[derive(Debug, Clone, Default)]
-pub struct RouteParams(HashMap<Symbol, Symbol>);
+pub struct RouteParams(pub(crate) SmallVec<[(Symbol, Symbol); 4]>);
 
 impl RouteParams {
     /// Gets the parameter value associated with the given key, if present.
@@ -22,7 +23,7 @@ impl RouteParams {
     /// Resolves both the key and the value using the global symbol interner.
     pub fn get(&self, key: &str) -> Option<String> {
         let sym_key = INTERNER.get(key)?;
-        let sym_val = self.0.get(&sym_key)?;
+        let sym_val = self.0.iter().find(|(k, _)| *k == sym_key).map(|(_, v)| v)?;
         INTERNER.resolve(*sym_val).map(|s| s.to_owned())
     }
 
@@ -30,7 +31,7 @@ impl RouteParams {
     pub fn contains(&self, key: &str) -> bool {
         INTERNER
             .get(key)
-            .map_or(false, |sym| self.0.contains_key(&sym))
+            .map_or(false, |sym| self.0.iter().any(|(k, _)| *k == sym))
     }
 
     /// Returns the total number of parameters.
@@ -62,8 +63,8 @@ pub trait RequestExt {
 
 /// Internal trait used to attach route parameters to a request during routing.
 pub(crate) trait RequestExtInternal {
-    /// Sets the [`RouteParams`] using a raw `HashMap<Symbol, Symbol>`.
-    fn set_params(&mut self, params: HashMap<Symbol, Symbol>);
+    /// Sets the [`RouteParams`] using a small sequence of parameters.
+    fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>);
 }
 
 impl RequestExt for Request {
@@ -75,7 +76,7 @@ impl RequestExt for Request {
 }
 
 impl RequestExtInternal for Request {
-    fn set_params(&mut self, params: HashMap<Symbol, Symbol>) {
+    fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>) {
         self.extensions_mut().insert(RouteParams(params));
     }
 }

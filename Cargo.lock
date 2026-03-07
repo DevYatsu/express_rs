@@ -231,7 +231,7 @@ dependencies = [
  "local-ip-address",
  "log",
  "lru",
- "matchthem",
+ "matchit",
  "mime_guess",
  "once_cell",
  "quick_cache",
@@ -555,10 +555,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "matchthem"
-version = "0.0.1"
+name = "matchit"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e4a2379263a39cac238a4355f24108d6e980cd902757a6f6cf1602d4c8bd2ac"
+checksum = "b3eede3bdf92f3b4f9dc04072a9ce5ab557d5ec9038773bf9ffcd5588b3cc05b"
 
 [[package]]
 name = "memchr"

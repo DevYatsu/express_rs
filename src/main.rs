@@ -1,10 +1,9 @@
-use std::{sync::atomic::{AtomicU32, Ordering}};
-
+use std::sync::atomic::{AtomicU32, Ordering};
 use express_rs::{
     app,
     express::{
-        AuthMiddleware, CorsMiddleware, LoggingMiddleware, RateLimitMiddleware,
-        StaticServeMiddleware, auth::user::AuthLevel,
+        CorsMiddleware, LoggingMiddleware,
+        StaticServeMiddleware,
     },
     handler::{
         Request, Response,
@@ -66,7 +65,8 @@ async fn main() {
     #[cfg(debug_assertions)]
     app.use_with("/{{*p}}", LoggingMiddleware);
 
-    app.get("/", async |req: Request, mut res: Response| {
+    app
+    .get("/", async |req: Request, mut res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -89,17 +89,23 @@ async fn main() {
         </html>
         "#;
 
-        req.get_state::<State>().await.request_count.fetch_add(1, Ordering::Relaxed);
+        req.get_state::<State>()
+            .await
+            .request_count
+            .fetch_add(1, Ordering::Relaxed);
 
         res.status_code(200)
             .unwrap()
             .content_type("text/html; charset=utf-8");
 
         res.send_html(html)
-    });
-
-    app.get("/count", async |req: Request, mut res: Response| {
-        let state = req.get_state::<State>().await.request_count.load(Ordering::Relaxed);
+    })
+    .get("/count", async |req: Request, mut res: Response| {
+        let state = req
+            .get_state::<State>()
+            .await
+            .request_count
+            .load(Ordering::Relaxed);
         res.json(&json!({
             "request_count": state,
             "message": "Request count retrieved successfully"

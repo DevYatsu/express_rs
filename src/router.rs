@@ -1,8 +1,7 @@
 use self::interner::INTERNER;
 use crate::handler::{FnHandler, Middleware, Request, Response, request::RequestExtInternal};
-use ahash::{HashMap, HashMapExt};
+use ahash::HashMap;
 use layer::Layer;
-use log::warn;
 use smallvec::{SmallVec, smallvec};
 
 pub mod interner;
@@ -11,8 +10,36 @@ mod method;
 
 pub use method::MethodKind;
 
-type LayerIndices = SmallVec<[usize; 8]>;
-type MethodRoutes = HashMap<MethodKind, matchthem::Router<LayerIndices>>;
+pub type LayerIndices = SmallVec<[usize; 8]>;
+
+#[derive(Debug, Default)]
+pub struct MethodRouter {
+    pub matcher: matchit::Router<usize>,
+    pub indices: Vec<LayerIndices>,
+    pub path_to_idx: HashMap<String, usize>,
+}
+
+impl MethodRouter {
+    fn add_route(&mut self, path: &str, layer_index: usize) {
+        if let Some(&idx) = self.path_to_idx.get(path) {
+            self.indices[idx].push(layer_index);
+        } else {
+            let idx = self.indices.len();
+            self.indices.push(smallvec![layer_index]);
+            self.path_to_idx.insert(path.to_string(), idx);
+            self.matcher.insert(path.to_string(), idx).expect("Failed to insert route");
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MiddlewareMatcher {
+    pub path: String,
+    pub router: matchit::Router<()>,
+    pub indices: LayerIndices,
+}
+
+pub type MethodRoutes = HashMap<MethodKind, MethodRouter>;
 
 /// The core routing engine for `express_rs`.
 ///
@@ -23,12 +50,12 @@ pub struct Router {
     /// All layers (routes and middleware), stored in order of registration.
     ///
     /// Each `Layer` contains metadata and a handler function.
-    stack: Vec<Layer>,
+    pub stack: Vec<Layer>,
 
-    /// Path-based matcher for global middleware.
+    /// Path-based matchers for global middleware.
     ///
-    /// Middlewares are matched and executed in order of registration.
-    pub middleware_matcher: matchthem::Router<LayerIndices>,
+    /// Middlewares are evaluated against all registered patterns.
+    pub middleware_matchers: Vec<MiddlewareMatcher>,
 
     /// HTTP method-specific route matchers.
     ///
@@ -43,25 +70,11 @@ impl Router {
         handler: impl FnHandler,
         method: MethodKind,
     ) -> &mut Layer {
-        let path_ref: &str = path.as_ref();
+        let path_ref = path.as_ref();
         let layer_index = self.stack.len();
 
         let method_routes = self.routes.entry(method).or_default();
-
-        match method_routes.at_mut(path_ref) {
-            Ok(_entry) => {
-                warn!(
-                    "Route already exists for path: {}, other handlers won't be registered",
-                    path_ref
-                );
-                // entry.value.push(layer_index)
-            }
-            Err(_) => {
-                method_routes
-                    .insert(path_ref, smallvec![layer_index])
-                    .expect("Failed to insert route");
-            }
-        }
+        method_routes.add_route(path_ref, layer_index);
 
         let route = Layer::route(path_ref, method, handler);
         self.stack.push(route);
@@ -73,15 +86,23 @@ impl Router {
         let path = path.as_ref();
         let layer_index = self.stack.len();
 
-        match self.middleware_matcher.at_mut(path) {
-            Ok(entry) => entry.value.push(layer_index),
-            Err(_) => {
-                let mut indices = SmallVec::with_capacity(2);
-                indices.push(layer_index);
-                self.middleware_matcher
-                    .insert(path, indices)
-                    .expect("Failed to insert middleware");
+        let mut found = false;
+        for matcher in &mut self.middleware_matchers {
+            if matcher.path == path {
+                matcher.indices.push(layer_index);
+                found = true;
+                break;
             }
+        }
+
+        if !found {
+            let mut router = matchit::Router::new();
+            router.insert(path.to_string(), ()).expect("Failed to insert middleware");
+            self.middleware_matchers.push(MiddlewareMatcher {
+                path: path.to_string(),
+                router,
+                indices: smallvec![layer_index],
+            });
         }
 
         let middleware = Layer::middleware(path, middleware);
@@ -90,57 +111,123 @@ impl Router {
         self
     }
 
+    /// Mounts another Router at the specified prefix path.
+    /// This works truly like Express (`app.use('/api', router)`), but it is 
+    /// highly optimized! It flattens the nested router into the parent router,
+    /// avoiding runtime hierarchical traversal overhead entirely.
+    pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router) -> &mut Self {
+        let prefix = prefix.as_ref();
+        let prefix = if prefix.ends_with('/') {
+            &prefix[..prefix.len() - 1]
+        } else {
+            prefix
+        };
+
+        for layer in router.stack {
+            match layer {
+                Layer::Route { path, method, handler } => {
+                    let new_path = if path == "/" {
+                        prefix.to_string()
+                    } else {
+                        format!("{}{}", prefix, path)
+                    };
+                    
+                    let layer_index = self.stack.len();
+                    let method_routes = self.routes.entry(method).or_default();
+                    method_routes.add_route(&new_path, layer_index);
+
+                    self.stack.push(Layer::Route {
+                        path: new_path,
+                        method,
+                        handler,
+                    });
+                }
+                Layer::Middleware { path, handler } => {
+                    let new_path = if path.starts_with('/') {
+                        format!("{}{}", prefix, path)
+                    } else {
+                        format!("{}/{}", prefix, path)
+                    };
+
+                    let layer_index = self.stack.len();
+                    let mut found = false;
+                    for matcher in &mut self.middleware_matchers {
+                        if matcher.path == new_path {
+                            matcher.indices.push(layer_index);
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if !found {
+                        let mut r = matchit::Router::new();
+                        r.insert(new_path.clone(), ()).expect("Failed to insert nested middleware");
+                        self.middleware_matchers.push(MiddlewareMatcher {
+                            path: new_path.clone(),
+                            router: r,
+                            indices: smallvec![layer_index],
+                        });
+                    }
+
+                    self.stack.push(Layer::Middleware {
+                        path: new_path,
+                        handler,
+                    });
+                }
+            }
+        }
+
+        self
+    }
+
     pub async fn handle(&self, mut req: Request, mut res: Response) -> Response {
         let path = req.uri().path();
         let method = &MethodKind::from_hyper(req.method());
 
-        // Gather middleware handlers
-        let mut matched = self
-            .middleware_matcher
-            .all_matches(path)
-            .into_iter()
-            .flat_map(|m| m.value)
-            .collect::<SmallVec<[&usize; 8]>>();
+        let mut matched = SmallVec::<[&usize; 8]>::new();
+        let mut route_params = SmallVec::<[(interner::Symbol, interner::Symbol); 4]>::new();
+
+        for matcher in &self.middleware_matchers {
+            if let Ok(matched_route) = matcher.router.at(path) {
+                for (k, v) in matched_route.params.iter() {
+                    let sym_k = INTERNER.get_or_intern(k);
+                    let sym_v = INTERNER.get_or_intern(v);
+                    route_params.push((sym_k, sym_v));
+                }
+                matched.extend(matcher.indices.iter());
+            }
+        }
 
         let mut path_exists = false;
 
-        let router = match self.routes.get(method) {
-            Some(router) => router,
-            None => {
-                req.set_params(Default::default());
-                if matched.is_empty() {
-                    res.status_code(404).unwrap();
-                    return res.send_text("Not Found");
-                } else {
-                    res.status_code(405).unwrap();
-                    return res.send_text("Method Not Allowed");
+        if let Some(method_routes) = self.routes.get(method) {
+            if let Ok(route_match) = method_routes.matcher.at(path) {
+                path_exists = true;
+
+                if !route_match.params.is_empty() {
+                    for (k, v) in route_match.params.iter() {
+                        let sym_k = INTERNER.get_or_intern(k);
+                        let sym_v = INTERNER.get_or_intern(v);
+                        route_params.push((sym_k, sym_v));
+                    }
                 }
+
+                matched.extend(method_routes.indices[*route_match.value].iter());
             }
-        };
-
-        if let Ok(route_match) = router.at(path) {
-            path_exists = true;
-
-            let mut params = HashMap::with_capacity(route_match.params.len());
-
-            if !route_match.params.is_empty() {
-                for (k, v) in route_match.params.iter() {
-                    let sym_k = INTERNER.get_or_intern(k);
-                    let sym_v = INTERNER.get_or_intern(v);
-                    params.insert(sym_k, sym_v);
-                }
-            }
-
-            let value = route_match.value;
-            req.set_params(params);
-            matched.extend(value);
-        } else {
-            req.set_params(Default::default());
         }
 
         if matched.is_empty() {
+            // let's check other methods to return proper 405 or 404
+            for (m, method_routes) in &self.routes {
+                if m != method {
+                    if method_routes.matcher.at(path).is_ok() {
+                        path_exists = true;
+                        break;
+                    }
+                }
+            }
+            
             let status = if path_exists { 405 } else { 404 };
-
             res.status_code(status).unwrap();
 
             return res.send_text(match status {
@@ -148,6 +235,8 @@ impl Router {
                 _ => "Method Not Allowed",
             });
         }
+
+        req.set_params(route_params);
 
         // sort and dedup
         matched.sort_unstable();
@@ -191,17 +280,31 @@ impl Router {
 
         res.send_text("Method Not Allowed")
     }
+}
 
-    // #[inline(always)]
-    // fn create_next<'a>() -> (Arc<AtomicBool>, Next) {
-    //     let called_next = Arc::new(AtomicBool::new(false));
-    //     let next_signal: Next = Box::new({
-    //         let called_next = Arc::clone(&called_next);
-    //         move || {
-    //             called_next.store(true, Ordering::Relaxed);
-    //         }
-    //     });
+macro_rules! generate_router_methods {
+    (
+        methods: [$($method:ident),* $(,)?]
+    ) => {
+        impl Router {
+            $(
+                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self
+                {
+                    use hyper::Method;
+                    use std::str::FromStr;
+                    log::info!("Adding {} handler to router path: {}", stringify!($method), path.as_ref());
 
-    //     (called_next, next_signal)
-    // }
+                    let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
+
+                    self.route(path, handler, method);
+
+                    self
+                }
+            )*
+        }
+    };
+}
+
+generate_router_methods! {
+    methods: [get, post, put, delete, patch, head, connect, trace]
 }
