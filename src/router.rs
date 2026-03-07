@@ -1,5 +1,7 @@
 use self::interner::INTERNER;
-use crate::handler::{FnHandler, Middleware, Request, Response, request::RequestExtInternal};
+use crate::handler::{
+    ExpressResponse, FnHandler, Middleware, Request, Response, request::RequestExtInternal,
+};
 use ahash::HashMap;
 use layer::Layer;
 use smallvec::{SmallVec, smallvec};
@@ -27,7 +29,9 @@ impl MethodRouter {
             let idx = self.indices.len();
             self.indices.push(smallvec![layer_index]);
             self.path_to_idx.insert(path.to_string(), idx);
-            self.matcher.insert(path.to_string(), idx).expect("Failed to insert route");
+            self.matcher
+                .insert(path.to_string(), idx)
+                .expect("Failed to insert route");
         }
     }
 }
@@ -97,7 +101,9 @@ impl Router {
 
         if !found {
             let mut router = matchit::Router::new();
-            router.insert(path.to_string(), ()).expect("Failed to insert middleware");
+            router
+                .insert(path.to_string(), ())
+                .expect("Failed to insert middleware");
             self.middleware_matchers.push(MiddlewareMatcher {
                 path: path.to_string(),
                 router,
@@ -112,7 +118,7 @@ impl Router {
     }
 
     /// Mounts another Router at the specified prefix path.
-    /// This works truly like Express (`app.use('/api', router)`), but it is 
+    /// This works truly like Express (`app.use('/api', router)`), but it is
     /// highly optimized! It flattens the nested router into the parent router,
     /// avoiding runtime hierarchical traversal overhead entirely.
     pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router) -> &mut Self {
@@ -125,13 +131,17 @@ impl Router {
 
         for layer in router.stack {
             match layer {
-                Layer::Route { path, method, handler } => {
+                Layer::Route {
+                    path,
+                    method,
+                    handler,
+                } => {
                     let new_path = if path == "/" {
                         prefix.to_string()
                     } else {
                         format!("{}{}", prefix, path)
                     };
-                    
+
                     let layer_index = self.stack.len();
                     let method_routes = self.routes.entry(method).or_default();
                     method_routes.add_route(&new_path, layer_index);
@@ -161,7 +171,8 @@ impl Router {
 
                     if !found {
                         let mut r = matchit::Router::new();
-                        r.insert(new_path.clone(), ()).expect("Failed to insert nested middleware");
+                        r.insert(new_path.clone(), ())
+                            .expect("Failed to insert nested middleware");
                         self.middleware_matchers.push(MiddlewareMatcher {
                             path: new_path.clone(),
                             router: r,
@@ -226,11 +237,10 @@ impl Router {
                     }
                 }
             }
-            
-            let status = if path_exists { 405 } else { 404 };
-            res.status_code(status).unwrap();
 
-            return res.send_text(match status {
+            let status = if path_exists { 405 } else { 404 };
+
+            return res.status_code(status).unwrap().send_text(match status {
                 404 => "Not Found",
                 _ => "Method Not Allowed",
             });
@@ -276,35 +286,84 @@ impl Router {
         }
 
         // no route matched
-        res.status_code(405).unwrap();
-
-        res.send_text("Method Not Allowed")
+        res.status_code(405)
+            .unwrap()
+            .send_text("Method Not Allowed")
     }
 }
 
-macro_rules! generate_router_methods {
-    (
-        methods: [$($method:ident),* $(,)?]
-    ) => {
-        impl Router {
-            $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self
-                {
-                    use hyper::Method;
-                    use std::str::FromStr;
-                    log::info!("Adding {} handler to router path: {}", stringify!($method), path.as_ref());
-
-                    let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
-
-                    self.route(path, handler, method);
-
-                    self
-                }
-            )*
+#[macro_export]
+macro_rules! define_methods {
+    () => {
+        pub fn get(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Get)
+        }
+        pub fn post(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Post)
+        }
+        pub fn put(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Put)
+        }
+        pub fn delete(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Delete)
+        }
+        pub fn patch(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Patch)
+        }
+        pub fn head(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Head)
+        }
+        pub fn connect(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Connect)
+        }
+        pub fn trace(
+            &mut self,
+            path: impl AsRef<str>,
+            handler: impl $crate::handler::FnHandler,
+        ) -> &mut Self {
+            self.add_route(path, handler, $crate::router::MethodKind::Trace)
         }
     };
 }
 
-generate_router_methods! {
-    methods: [get, post, put, delete, patch, head, connect, trace]
+impl Router {
+    define_methods!();
+
+    fn add_route(
+        &mut self,
+        path: impl AsRef<str>,
+        handler: impl FnHandler,
+        method: MethodKind,
+    ) -> &mut Self {
+        self.route(path, handler, method);
+        self
+    }
 }

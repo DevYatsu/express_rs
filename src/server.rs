@@ -7,7 +7,13 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::signal;
 
-pub(crate) type ServerResponse = hyper::Response<http_body_util::Full<hyper::body::Bytes>>;
+use std::sync::Arc;
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+
+pub(crate) type ServerResponse = hyper::Response<
+    http_body_util::combinators::BoxBody<hyper::body::Bytes, std::convert::Infallible>,
+>;
 
 pub(crate) struct Server;
 
@@ -18,16 +24,59 @@ impl Server {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         F: Fn() -> S + Send + Sync + 'static + Clone,
-        S: Service<
-                Request<Incoming>,
-                Response = ServerResponse,
-                Error = Infallible,
-            > + Send
+        S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
+            + Send
             + 'static,
         S::Future: Send + 'static,
     {
         let listener = TcpListener::bind(addr).await?;
+        Self::run(listener, make_service, |stream| async move {
+            Ok(TokioIo::new(stream))
+        })
+        .await
+    }
 
+    pub async fn bind_tls<F, S>(
+        addr: SocketAddr,
+        tls_config: Arc<ServerConfig>,
+        make_service: F,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        F: Fn() -> S + Send + Sync + 'static + Clone,
+        S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
+            + Send
+            + 'static,
+        S::Future: Send + 'static,
+    {
+        let listener = TcpListener::bind(addr).await?;
+        let tls_acceptor = TlsAcceptor::from(tls_config);
+        Self::run(listener, make_service, move |stream| {
+            let tls_acceptor = tls_acceptor.clone();
+            async move {
+                let tls_stream = tls_acceptor.accept(stream).await?;
+                Ok(TokioIo::new(tls_stream))
+            }
+        })
+        .await
+    }
+
+    async fn run<F, S, A, Fut, I>(
+        listener: TcpListener,
+        make_service: F,
+        acceptor: A,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        F: Fn() -> S + Send + Sync + 'static + Clone,
+        S: Service<Request<Incoming>, Response = ServerResponse, Error = Infallible>
+            + Send
+            + 'static,
+        S::Future: Send + 'static,
+        A: Fn(tokio::net::TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<I, Box<dyn std::error::Error + Send + Sync>>>
+            + Send
+            + 'static,
+        I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+    {
         let mut shutdown = tokio::spawn(async {
             signal::ctrl_c().await.expect("failed to listen for ctrl_c");
             log::info!("🛑 Received Ctrl+C, shutting down server...");
@@ -37,11 +86,18 @@ impl Server {
             tokio::select! {
                 Ok((stream, _)) = listener.accept() => {
                     let service = make_service();
-                    let io = TokioIo::new(stream);
+                    let fut = acceptor(stream);
 
                     tokio::spawn(async move {
-                        if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                            log::error!("Connection error: {}", err);
+                        match fut.await {
+                            Ok(io) => {
+                                if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                                    log::error!("Connection error: {}", err);
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("Handshake failed: {}", err);
+                            }
                         }
                     });
                 }

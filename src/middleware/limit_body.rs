@@ -1,15 +1,8 @@
-use crate::{
-    express::respond_error,
-    handler::{
-        Request, Response,
-        middleware::{Middleware, MiddlewareResult, next, stop},
-    },
-};
+use crate::handler::{Request, Response, request::RequestExt};
+use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
 use async_trait::async_trait;
 use log::warn;
 use serde_json::json;
-
-use super::client_prefers_json;
 
 /// Middleware that rejects requests with a `Content-Length` exceeding the allowed limit.
 /// Can respond in either JSON or plain text depending on the `Accept` header.
@@ -33,16 +26,14 @@ impl Default for BodySizeLimitMiddleware {
 #[async_trait]
 impl Middleware for BodySizeLimitMiddleware {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
-        let wants_json = client_prefers_json(req);
+        let wants_json = req.prefers_json();
 
         // Handle missing Content-Length
         let Some(header) = req.headers().get("Content-Length") else {
             if self.strict {
                 warn!("Strict mode: Content-Length header is missing.");
-                res.status_code(411).unwrap();
 
-                respond_error(
-                    res,
+                res.respond_error(
                     411,
                     "Content-Length header required",
                     json!({
@@ -52,19 +43,19 @@ impl Middleware for BodySizeLimitMiddleware {
                     wants_json,
                 );
 
-                return stop();
+                return stop_res();
             }
-            return next();
+            return next_res();
         };
 
         let Ok(length_str) = header.to_str() else {
             warn!("Invalid Content-Length header format.");
-            return next();
+            return next_res();
         };
 
         let Ok(length) = length_str.parse::<usize>() else {
             warn!("Unable to parse Content-Length as usize.");
-            return next();
+            return next_res();
         };
 
         if length > self.max_size_bytes {
@@ -73,10 +64,7 @@ impl Middleware for BodySizeLimitMiddleware {
                 length, self.max_size_bytes
             );
 
-            res.status_code(413).unwrap();
-
-            respond_error(
-                res,
+            res.respond_error(
                 413,
                 "Payload too large",
                 json!({
@@ -87,9 +75,9 @@ impl Middleware for BodySizeLimitMiddleware {
                 wants_json,
             );
 
-            return stop();
+            return stop_res();
         }
 
-        next()
+        next_res()
     }
 }

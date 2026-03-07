@@ -1,9 +1,6 @@
 use super::method::MethodKind;
-use crate::handler::{
-    Request, Response,
-    fn_handler::FnHandler,
-    middleware::{self, Middleware},
-};
+use crate::handler::{Request, Response, fn_handler::FnHandler};
+use crate::middleware::{self, Middleware};
 use std::{fmt::Debug, sync::Arc};
 
 /// Represents a single routing or middleware layer in the application.

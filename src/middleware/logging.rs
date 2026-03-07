@@ -1,7 +1,5 @@
-use crate::handler::{
-    Request, Response,
-    middleware::{Middleware, MiddlewareResult, next},
-};
+use crate::handler::{Request, Response};
+use crate::middleware::{Middleware, MiddlewareResult, next_res};
 use async_trait::async_trait;
 use log::info;
 
@@ -29,6 +27,6 @@ impl Middleware for LoggingMiddleware {
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("Unknown")
         );
-        next()
+        next_res()
     }
 }

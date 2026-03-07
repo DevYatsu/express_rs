@@ -1,8 +1,5 @@
-use super::{client_prefers_json, respond_error};
-use crate::handler::{
-    Request, Response,
-    middleware::{Middleware, MiddlewareResult, next, stop},
-};
+use crate::handler::{ExpressResponse, Request, Response, request::RequestExt};
+use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hyper::header::HeaderValue;
@@ -60,22 +57,18 @@ impl Default for RateLimitMiddleware {
 impl Middleware for RateLimitMiddleware {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
         let client_ip = req
-            .headers()
-            .get("X-Forwarded-For")
-            .or_else(|| req.headers().get("X-Real-IP"))
-            .and_then(|h| h.to_str().ok())
+            .get_header("X-Forwarded-For")
+            .or_else(|| req.get_header("X-Real-IP"))
             .unwrap_or("unknown")
             .to_string();
 
         if self.is_rate_limited(&client_ip) {
             let retry_after = self.window_size.as_secs().to_string();
-            res.status_code(429).unwrap();
             res.header("Retry-After", HeaderValue::from_str(&retry_after).unwrap());
 
-            let wants_json = client_prefers_json(req);
+            let wants_json = req.prefers_json();
 
-            respond_error(
-                res,
+            res.respond_error(
                 429,
                 "Rate limit exceeded",
                 json!({
@@ -86,10 +79,10 @@ impl Middleware for RateLimitMiddleware {
                 wants_json,
             );
 
-            return stop();
+            return stop_res();
         }
 
-        next()
+        next_res()
     }
 }
 

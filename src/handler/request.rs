@@ -1,8 +1,11 @@
-use crate::router::interner::{INTERNER, Symbol};
+use crate::{
+    handler::Response,
+    router::interner::{INTERNER, Symbol},
+};
 // use ahash::HashMap;
-use smallvec::SmallVec;
 use async_trait::async_trait;
 use hyper::{Request as HRequest, body::Incoming};
+use smallvec::SmallVec;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -55,10 +58,27 @@ impl RouteParams {
     }
 }
 
-/// Extension trait to access route parameters from a [`Request`] object.
 pub trait RequestExt {
     /// Returns the [`RouteParams`] associated with this request.
     fn params(&self) -> &RouteParams;
+
+    /// Gets the path of the request URL (e.g., `/users/123`).
+    fn path(&self) -> &str;
+
+    /// Gets the value of a specific query parameter from the URL.
+    fn query(&self, key: &str) -> Option<String>;
+
+    /// Gets a specific HTTP header value by name.
+    fn get_header(&self, key: &str) -> Option<&str>;
+
+    /// Gets the host header or URL host.
+    fn host_name(&self) -> Option<&str>;
+
+    /// Determines whether the client prefers a JSON response based on the Accept header.
+    fn prefers_json(&self) -> bool;
+
+    /// Returns a new response object, allowing for chaining from the request.
+    fn res(&self) -> Response;
 }
 
 /// Internal trait used to attach route parameters to a request during routing.
@@ -73,6 +93,40 @@ impl RequestExt for Request {
             .get::<RouteParams>()
             .expect("Route parameters must be set before accessing them")
     }
+
+    fn path(&self) -> &str {
+        self.uri().path()
+    }
+
+    fn query(&self, key: &str) -> Option<String> {
+        self.uri().query().and_then(|q| {
+            form_urlencoded::parse(q.as_bytes())
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.into_owned())
+        })
+    }
+
+    fn get_header(&self, key: &str) -> Option<&str> {
+        self.headers().get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn host_name(&self) -> Option<&str> {
+        self.headers()
+            .get(hyper::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .or_else(|| self.uri().host())
+    }
+
+    fn prefers_json(&self) -> bool {
+        self.headers()
+            .get(hyper::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map_or(true, |accept| accept.contains("application/json"))
+    }
+
+    fn res(&self) -> Response {
+        Response::new()
+    }
 }
 
 impl RequestExtInternal for Request {
@@ -81,24 +135,19 @@ impl RequestExtInternal for Request {
     }
 }
 
-#[async_trait]
 pub trait RequestState {
-    async fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S>;
+    fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S>;
     fn set_state<S: Sync + Send + 'static>(&mut self, state: S);
 }
 
-#[async_trait]
 impl RequestState for Request {
-    async fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S> {
-        let arc = self
-            .extensions()
+    fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S> {
+        self.extensions()
             .get::<Arc<S>>()
-            .expect("State must be set before accessing it");
-
-        arc
+            .expect("State must be set before accessing it")
     }
 
     fn set_state<S: Sync + Send + 'static>(&mut self, state: S) {
-        self.extensions_mut().insert(Arc::new(RwLock::new(state)));
+        self.extensions_mut().insert(Arc::new(state));
     }
 }

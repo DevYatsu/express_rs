@@ -1,17 +1,11 @@
-use crate::handler::middleware::Middleware;
-use crate::handler::response::error::ResponseError;
-use crate::handler::{Request as ExpressRequest, Response as ExpressResponse};
-use crate::router::Router;
-use crate::server::{Server, ServerResponse};
-use hyper::body::{Body, Bytes, Incoming};
-use hyper::service::Service;
-use hyper::{Request, Response};
+use crate::handler::FnHandler;
+use crate::handler::{Middleware, Request as ExpressRequest, Response as ExpressResponse};
+use crate::router::{MethodKind, Router};
+use crate::server::Server;
 use log::info;
-use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
+use tokio_rustls::rustls::ServerConfig;
 
 /// The main application structure for `express_rs`.
 ///
@@ -70,91 +64,67 @@ impl<S: Sync + Send + 'static> App<S> {
         self.router.use_with(path, middleware);
     }
 
+    crate::define_methods!();
+
+    fn add_route(
+        &mut self,
+        path: impl AsRef<str>,
+        handler: impl FnHandler,
+        method: MethodKind,
+    ) -> &mut Self {
+        self.router.route(path, handler, method);
+        self
+    }
+
     pub async fn listen<T, Fut>(self, port: u16, callback: T)
     where
         Self: Sized + Send + Sync + 'static,
         T: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        use hyper::service::service_fn;
-
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-
-        let app = AppService(Arc::new(self));
-
+        let app = Arc::new(self);
         callback().await;
 
-        let handler_factory = {
+        let factory = move || {
             let app = app.clone();
-            move || {
+            hyper::service::service_fn(move |req| {
                 let app = app.clone();
-                service_fn(move |req| {
-                    let app = app.clone();
-                    async move {
-                        let response = app.call(req).await;
-                        response
-                    }
-                })
-            }
+                async move {
+                    let response = app.router.handle(req, ExpressResponse::default()).await;
+                    Ok::<_, std::convert::Infallible>(response.into_hyper())
+                }
+            })
         };
 
-        if let Err(e) = Server::bind(addr, handler_factory).await {
+        if let Err(e) = Server::bind(addr, factory).await {
             eprintln!("server error: {}", e);
         }
     }
-}
 
-struct AppService<S: Sync + Send + 'static = ()>(Arc<App<S>>);
+    pub async fn listen_https<T, Fut>(self, port: u16, tls_config: ServerConfig, callback: T)
+    where
+        Self: Sized + Send + Sync + 'static,
+        T: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let app = Arc::new(self);
+        callback().await;
 
-impl<S: Sync + Send + 'static> Clone for AppService<S> {
-    fn clone(&self) -> Self {
-        AppService(Arc::clone(&self.0))
-    }
-}
-
-impl<S: Sync + Send + 'static> Service<Request<Incoming>> for AppService<S> {
-    type Response = ServerResponse;
-    type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn call(&self, req: Request<Incoming>) -> Self::Future {
-        let app = Arc::clone(&self.0);
-        Box::pin(async move {
-            let response = app.handle(req, ExpressResponse::default()).await;
-            Ok(response.into_hyper())
-        })
-    }
-}
-
-use crate::handler::FnHandler;
-use crate::router::MethodKind;
-
-macro_rules! generate_methods {
-    (
-        methods: [$($method:ident),* $(,)?]
-    ) => {
-        impl<S: Sync + Send + 'static> App<S> {
-            $(
-                pub fn $method(&mut self, path: impl AsRef<str>, handler: impl FnHandler) -> &mut Self
-                {
-                    use hyper::Method;
-                    info!("Adding {} handler to path: {}", stringify!($method), path.as_ref());
-
-                    // DO NOT ABSOLUTELY REMOVE .to_uppercase call, it's needed for comparaison of Method struct
-                    let method = MethodKind::from_hyper(&Method::from_str(&stringify!($method).to_uppercase()).expect("This method is not a valid Method"));
-
-                    let route = self.router.route(path, handler, method);
-
-                    #[cfg(debug_assertions)]
-                    println!("route: {:?}", route);
-
-                    self
+        let factory = move || {
+            let app = app.clone();
+            hyper::service::service_fn(move |req| {
+                let app = app.clone();
+                async move {
+                    let response = app.router.handle(req, ExpressResponse::default()).await;
+                    Ok::<_, std::convert::Infallible>(response.into_hyper())
                 }
-            )*
-        }
-    };
-}
+            })
+        };
 
-generate_methods! {
-    methods: [get, post, put, delete, patch, head, connect, trace]
+        if let Err(e) = Server::bind_tls(addr, Arc::new(tls_config), factory).await {
+            eprintln!("https server error: {}", e);
+        }
+    }
 }

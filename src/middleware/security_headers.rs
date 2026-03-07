@@ -1,7 +1,5 @@
-use crate::handler::{
-    Request, Response,
-    middleware::{Middleware, MiddlewareResult, next},
-};
+use crate::handler::{ExpressResponse, Request, Response};
+use crate::middleware::{Middleware, MiddlewareResult, next_res};
 use async_trait::async_trait;
 use hyper::header::HeaderValue;
 
@@ -60,6 +58,6 @@ impl Middleware for SecurityHeadersMiddleware {
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
 
-        next()
+        next_res()
     }
 }

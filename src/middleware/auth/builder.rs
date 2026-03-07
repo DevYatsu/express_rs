@@ -1,5 +1,5 @@
 use super::AuthMiddleware;
-use crate::express::auth::{
+use crate::middleware::auth::{
     config::CookieAuthConfig, jwt::JwtTokenValidator, session::SessionTokenValidator,
     user::AuthLevel, validator::TokenValidator,
 };

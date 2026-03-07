@@ -1,7 +1,9 @@
 mod application;
-pub mod express;
 pub mod handler;
+pub mod middleware;
 pub mod router;
 mod server;
 
-pub use express::app;
+pub mod prelude;
+
+pub use middleware::app as express;

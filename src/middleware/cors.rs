@@ -1,7 +1,5 @@
-use crate::handler::{
-    Request, Response,
-    middleware::{Middleware, MiddlewareResult, next, stop},
-};
+use crate::handler::{ExpressResponse, Request, Response};
+use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
 use async_trait::async_trait;
 use hyper::header::HeaderValue;
 use std::collections::HashSet;
@@ -114,10 +112,10 @@ impl Middleware for CorsMiddleware {
             }
 
             res.status_code(204).unwrap();
-            return stop();
+            return stop_res();
         }
 
-        next()
+        next_res()
     }
 }
 

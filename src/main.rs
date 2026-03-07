@@ -1,16 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-use express_rs::{
-    app,
-    express::{
-        CorsMiddleware, LoggingMiddleware,
-        StaticServeMiddleware,
-    },
-    handler::{
-        Request, Response,
-        middleware::next_fut,
-        request::{RequestExt, RequestState},
-    },
-};
+use express_rs::prelude::*;
 use hyper::{
     StatusCode,
     header::{self, HeaderValue},
@@ -18,6 +6,7 @@ use hyper::{
 use local_ip_address::local_ip;
 use log::{error, info};
 use serde_json::json;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     fern::Dispatch::new()
@@ -45,7 +34,7 @@ async fn main() {
     setup_logger().unwrap();
 
     const PORT: u16 = 9000;
-    let mut app = app(State::default());
+    let mut app = express().with_new_state(State::default());
 
     app.use_with("/src/{{*p}}", StaticServeMiddleware);
     app.use_with("/css/{{*p}}", StaticServeMiddleware);
@@ -65,8 +54,7 @@ async fn main() {
     #[cfg(debug_assertions)]
     app.use_with("/{{*p}}", LoggingMiddleware);
 
-    app
-    .get("/", async |req: Request, mut res: Response| {
+    app.get("/", async |req: Request, res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -90,49 +78,42 @@ async fn main() {
         "#;
 
         req.get_state::<State>()
-            .await
             .request_count
             .fetch_add(1, Ordering::Relaxed);
 
         res.status_code(200)
             .unwrap()
-            .content_type("text/html; charset=utf-8");
-
-        res.send_html(html)
+            .content_type("text/html; charset=utf-8")
+            .send_html(html)
     })
-    .get("/count", async |req: Request, mut res: Response| {
+    .get("/count", async |req: Request, res: Response| {
         let state = req
             .get_state::<State>()
-            .await
             .request_count
             .load(Ordering::Relaxed);
         res.json(&json!({
             "request_count": state,
             "message": "Request count retrieved successfully"
         }))
-        .unwrap();
-
-        res
+        .unwrap()
     });
 
-    app.get("/json", async |_req: Request, mut res: Response| {
+    app.get("/json", async |_req: Request, res: Response| {
         res.json(&json!({
             "message": "Hello from JSON!",
             "status": "success",
             "version": "1.0"
         }))
-        .unwrap();
-
-        res
+        .unwrap()
     });
 
     app.get("/redirect", async |_req: Request, _res: Response| {
         Response::redirect("/")
     });
 
-    app.get("/status", async |_req: Request, mut res: Response| {
-        res.status(StatusCode::BAD_REQUEST);
-        res.send_text("400 Bad Request")
+    app.get("/status", async |_req: Request, res: Response| {
+        res.status(StatusCode::BAD_REQUEST)
+            .send_text("400 Bad Request")
     });
 
     app.get("/status/{status}", async |req: Request, res: Response| {
@@ -152,20 +133,17 @@ async fn main() {
     app.use_with("/hello", |_req: &mut Request, res: &mut Response| {
         res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
 
-        next_fut()
+        next()
     });
 
-    app.get("/hello", async |_req: Request, mut res: Response| {
+    app.get("/hello", async |_req: Request, res: Response| {
         res.body("Hello, world")
             .header(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=86400"),
             )
-            .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
-
-        res.write("!");
-
-        res
+            .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"))
+            .write("!")
     });
 
     println!("{:?}", app.router.routes);
