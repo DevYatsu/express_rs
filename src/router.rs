@@ -123,11 +123,7 @@ impl Router {
     /// avoiding runtime hierarchical traversal overhead entirely.
     pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router) -> &mut Self {
         let prefix = prefix.as_ref();
-        let prefix = if prefix.ends_with('/') {
-            &prefix[..prefix.len() - 1]
-        } else {
-            prefix
-        };
+        let prefix = prefix.trim_end_matches('/');
 
         for layer in router.stack {
             match layer {
@@ -211,8 +207,8 @@ impl Router {
 
         let mut path_exists = false;
 
-        if let Some(method_routes) = self.routes.get(method) {
-            if let Ok(route_match) = method_routes.matcher.at(path) {
+        if let Some(method_routes) = self.routes.get(method)
+            && let Ok(route_match) = method_routes.matcher.at(path) {
                 path_exists = true;
 
                 if !route_match.params.is_empty() {
@@ -225,17 +221,15 @@ impl Router {
 
                 matched.extend(method_routes.indices[*route_match.value].iter());
             }
-        }
 
         if matched.is_empty() {
             // let's check other methods to return proper 405 or 404
             for (m, method_routes) in &self.routes {
-                if m != method {
-                    if method_routes.matcher.at(path).is_ok() {
+                if m != method
+                    && method_routes.matcher.at(path).is_ok() {
                         path_exists = true;
                         break;
                     }
-                }
             }
 
             let status = if path_exists { 405 } else { 404 };

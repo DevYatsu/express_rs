@@ -16,16 +16,16 @@ pub enum MethodKind {
 
 impl MethodKind {
     pub fn from_hyper(method: &hyper::Method) -> Self {
-        match method {
-            &Method::GET => MethodKind::Get,
-            &Method::POST => MethodKind::Post,
-            &Method::PUT => MethodKind::Put,
-            &Method::DELETE => MethodKind::Delete,
-            &Method::PATCH => MethodKind::Patch,
-            &Method::HEAD => MethodKind::Head,
-            &Method::OPTIONS => MethodKind::Options,
-            &Method::TRACE => MethodKind::Trace,
-            &Method::CONNECT => MethodKind::Connect,
+        match *method {
+            Method::GET => MethodKind::Get,
+            Method::POST => MethodKind::Post,
+            Method::PUT => MethodKind::Put,
+            Method::DELETE => MethodKind::Delete,
+            Method::PATCH => MethodKind::Patch,
+            Method::HEAD => MethodKind::Head,
+            Method::OPTIONS => MethodKind::Options,
+            Method::TRACE => MethodKind::Trace,
+            Method::CONNECT => MethodKind::Connect,
             _ => unreachable!(),
         }
     }

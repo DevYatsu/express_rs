@@ -74,7 +74,7 @@ impl TokenValidator for JwtTokenValidator {
         parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
     }
 
-    async fn refresh_token(&self, token: &str) -> AuthResult<Option<String>> {
+    async fn refresh_token(&self, _token: &str) -> AuthResult<Option<String>> {
         // TODO: Implement JWT refresh logic
         // Check if token is close to expiry and generate new one
         Ok(None)

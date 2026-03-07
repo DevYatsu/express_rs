@@ -11,7 +11,7 @@ impl Middleware for StaticServeMiddleware {
         let uri_path = req.uri().path();
         let file_path = format!(".{}", uri_path);
 
-        if let Err(_) = res.file(&file_path).await {
+        if res.file(&file_path).await.is_err() {
             return next_res();
         }
 

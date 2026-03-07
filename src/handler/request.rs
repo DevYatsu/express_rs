@@ -3,11 +3,9 @@ use crate::{
     router::interner::{INTERNER, Symbol},
 };
 // use ahash::HashMap;
-use async_trait::async_trait;
 use hyper::{Request as HRequest, body::Incoming};
 use smallvec::SmallVec;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Aliased request type for the framework.
 ///
@@ -34,7 +32,7 @@ impl RouteParams {
     pub fn contains(&self, key: &str) -> bool {
         INTERNER
             .get(key)
-            .map_or(false, |sym| self.0.iter().any(|(k, _)| *k == sym))
+            .is_some_and(|sym| self.0.iter().any(|(k, _)| *k == sym))
     }
 
     /// Returns the total number of parameters.
@@ -121,7 +119,7 @@ impl RequestExt for Request {
         self.headers()
             .get(hyper::header::ACCEPT)
             .and_then(|v| v.to_str().ok())
-            .map_or(true, |accept| accept.contains("application/json"))
+            .is_none_or(|accept| accept.contains("application/json"))
     }
 
     fn res(&self) -> Response {

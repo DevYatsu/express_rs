@@ -67,13 +67,11 @@ impl Middleware for CorsMiddleware {
             None => false,
         };
 
-        if let Some(o) = origin {
-            if is_allowed_origin {
-                if let Ok(val) = HeaderValue::from_str(o) {
+        if let Some(o) = origin
+            && is_allowed_origin
+                && let Ok(val) = HeaderValue::from_str(o) {
                     res.header("Access-Control-Allow-Origin", val);
                 }
-            }
-        }
 
         if self.allow_credentials {
             res.header(
@@ -105,11 +103,10 @@ impl Middleware for CorsMiddleware {
                 res.header("Access-Control-Allow-Headers", val);
             }
 
-            if let Some(age) = self.max_age {
-                if let Ok(val) = HeaderValue::from_str(&age.to_string()) {
+            if let Some(age) = self.max_age
+                && let Ok(val) = HeaderValue::from_str(&age.to_string()) {
                     res.header("Access-Control-Max-Age", val);
                 }
-            }
 
             res.status_code(204).unwrap();
             return stop_res();

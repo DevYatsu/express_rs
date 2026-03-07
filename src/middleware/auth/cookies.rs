@@ -1,10 +1,9 @@
 use super::{
     config::CookieAuthConfig,
-    error::{AuthError, AuthResult},
+    error::AuthResult,
 };
 use crate::handler::Request;
 use cookie::{Cookie, CookieJar};
-use hyper::header::COOKIE;
 
 /// Cookie handling utility using the cookie crate
 #[derive(Debug, Clone)]
@@ -12,8 +11,8 @@ pub struct CookieHandler;
 
 impl CookieHandler {
     /// Extracts a specific cookie value from the request using cookie crate    
-    pub fn get_cookie_value(req: &Request, cookie_name: &str) -> AuthResult<Option<String>> {
-        let mut jar = CookieJar::new();
+    pub fn get_cookie_value(_req: &Request, cookie_name: &str) -> AuthResult<Option<String>> {
+        let jar = CookieJar::new();
 
         // if let Some(cookie_header) = req.headers().get(COOKIE) {
         //     // Fully extract the string to avoid returning a reference to `req`
@@ -41,8 +40,8 @@ impl CookieHandler {
     }
 
     /// Gets all cookies from the request
-    pub fn get_all_cookies(req: &Request) -> AuthResult<CookieJar> {
-        let mut jar = CookieJar::new();
+    pub fn get_all_cookies(_req: &Request) -> AuthResult<CookieJar> {
+        let jar = CookieJar::new();
 
         // for cookie_header in req.headers().get_all(COOKIE) {
         //     let cookie_str = cookie_header

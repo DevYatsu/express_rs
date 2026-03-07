@@ -11,7 +11,6 @@ use hyper::{
     },
 };
 use itoa::Buffer;
-use log::info;
 use lru::LruCache;
 use mime_guess;
 use once_cell::sync::Lazy;
@@ -162,7 +161,7 @@ impl ExpressResponse for Response {
     }
 }
 
-impl<'a> ExpressResponse for &'a mut Response {
+impl ExpressResponse for &mut Response {
     fn status(self, status: StatusCode) -> Self {
         self.status = status;
         self
