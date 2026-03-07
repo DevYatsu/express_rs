@@ -61,9 +61,10 @@ impl<S: Sync + Send + 'static> App<S> {
         self.router.handle(req, res).await
     }
 
-    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) {
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) -> &mut Self {
         info!("Adding middleware to path: {}", path.as_ref());
         self.router.use_with(path, middleware);
+        self
     }
 
     pub fn all(&mut self, path: impl AsRef<str>, handler: impl FnHandler + Clone) -> &mut Self {

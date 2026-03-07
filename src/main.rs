@@ -36,10 +36,10 @@ async fn main() {
     const PORT: u16 = 9000;
     let mut app = express().with_new_state(State::default());
 
-    app.use_with("/src/{{*p}}", StaticServeMiddleware);
-    app.use_with("/css/{{*p}}", StaticServeMiddleware);
-    app.use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware);
-    app.use_with("/{*p}", CorsMiddleware::default());
+    app.use_with("/src/{{*p}}", StaticServeMiddleware)
+        .use_with("/css/{{*p}}", StaticServeMiddleware)
+        .use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware)
+        .use_with("/{*p}", CorsMiddleware::default());
 
     // let mut h = HashMap::new();
     // h.insert("/".to_owned(), AuthLevel::User);
