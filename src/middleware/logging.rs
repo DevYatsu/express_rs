@@ -4,14 +4,6 @@ use async_trait::async_trait;
 use log::info;
 
 /// Middleware that logs each incoming HTTP request to the console or logger.
-///
-/// Logs the method, path, and user agent at the beginning of the request lifecycle.
-/// This is typically used for debugging and observability in both development and production.
-///
-/// Example log output:
-/// ```text
-/// GET /api/items - User-Agent: Mozilla/5.0
-/// ```
 #[derive(Debug, Clone)]
 pub struct LoggingMiddleware;
 

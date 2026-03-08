@@ -11,9 +11,7 @@ use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::ServerConfig;
 
-pub(crate) type ServerResponse = hyper::Response<
-    http_body_util::combinators::BoxBody<hyper::body::Bytes, std::convert::Infallible>,
->;
+pub use crate::handler::response::ServerResponse;
 
 pub(crate) struct Server;
 

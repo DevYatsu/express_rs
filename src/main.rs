@@ -1,26 +1,22 @@
 use express_rs::prelude::*;
-use hyper::{
-    StatusCode,
-    header::{self, HeaderValue},
-};
+use hyper::header::{self, HeaderValue};
 use local_ip_address::local_ip;
-use log::{error, info};
+use log::info;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
+    use std::io::Write;
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            writeln!(buf,
                 "{} [{}] {}",
                 chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"),
                 record.level(),
-                message
-            ))
+                record.args()
+            )
         })
-        .level(log::LevelFilter::Info)
-        .chain(fern::log_file("output.log")?)
-        .apply()?;
+        .try_init()?;
     Ok(())
 }
 
@@ -36,25 +32,20 @@ async fn main() {
     const PORT: u16 = 9000;
     let mut app = express().with_new_state(State::default());
 
-    app.use_with("/src/{{*p}}", StaticServeMiddleware)
-        .use_with("/css/{{*p}}", StaticServeMiddleware)
-        .use_with("/expressjs_tests/{{*p}}", StaticServeMiddleware)
-        .use_with("/{*p}", CorsMiddleware::default());
+    // ── Middleware ──────────────────────────────────────────────────────────
+    app.use_with("/{*p}", NormalizePathMiddleware::new())
+        .use_with("/src/{*p}", StaticServeMiddleware::new("../express_rs/").max_age(86400))
+        .use_with("/css/{*p}", StaticServeMiddleware::new("."))
+        .use_with("/expressjs_tests/{*p}", StaticServeMiddleware::new("."))
+        .use_with("/{*p}", CorsMiddleware::permissive());
 
-    // let mut h = HashMap::new();
-    // h.insert("/".to_owned(), AuthLevel::User);
-    // h.insert("/hello".to_owned(), AuthLevel::User);
-
-    // app.use_with("/{*p}", AuthMiddleware::jwt_auth("secret", h));
-
-    // app.use_with(
-    //     "/{*p}",
-    //     RateLimitMiddleware::new(10_000, Duration::from_secs(60)),
-    // );
     #[cfg(debug_assertions)]
-    app.use_with("/{{*p}}", LoggingMiddleware);
+    app.use_with("/{*p}", LoggingMiddleware);
 
-    app.get("/", async |req: Request, res: Response| {
+    // ── Routes ──────────────────────────────────────────────────────────────
+
+    // GET / — index page
+    app.get("/",async |req: Request, res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -84,77 +75,93 @@ async fn main() {
         res.status_code(200)
             .content_type("text/html; charset=utf-8")
             .send_html(html)
-    })
-    .get("/count", async |req: Request, res: Response| {
-        let state = req
+    });
+
+    // GET /count — request counter
+    app.get("/count", async |req: Request, res: Response| {
+        let count = req
             .get_state::<State>()
             .request_count
             .load(Ordering::Relaxed);
-        res.json(&json!({
-            "request_count": state,
+
+        res.send_json(&json!({
+            "request_count": count,
             "message": "Request count retrieved successfully"
         }))
     });
 
+    // GET /json — static JSON response
     app.get("/json", async |_req: Request, res: Response| {
-        res.json(&json!({
+        res.header(
+            hyper::header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=3600"),
+        )
+        .send_json(&json!({
             "message": "Hello from JSON!",
-            "status": "success",
+            "status": "success",        
             "version": "1.0"
         }))
     });
 
-    app.get("/redirect", async |_req: Request, _res: Response| {
-        Response::redirect("/")
+    // GET /redirect — redirect to /
+    app.get("/redirect", async |_req: Request, res: Response| {
+        res.redirect("/")
     });
 
-    app.get("/status", async |_req: Request, res: Response| {
-        res.status(StatusCode::BAD_REQUEST)
-            .send_text("400 Bad Request")
+    // GET /status — always 400
+    app.get("/status", async |_req:  Request, res: Response| {
+        res.status_code(400).send_text("400 Bad Request")
     });
 
+    // GET /status/:status — echo status param
     app.get("/status/{status}", async |req: Request, res: Response| {
-        res.send_text(format!("Status is {}", req.params().get("status").unwrap()))
+        let value = req.params().get("status").unwrap_or("unknown");
+        res.send_text(format!("Status is {value}"))
     });
 
-    app.get("/file", async |_req: Request, res: Response| {
-        match res.send_file("./Cargo.lock").await {
-            Ok(r) => r,
-            Err(e) => {
-                error!("Error sending file: {}", e);
-                Response::internal_server_error()
-            }
-        }
-    });
+    // GET /file — stream Cargo.lock (async, borrows res across await)
+    app.get(
+        "/file",
+        async|_req: Request, res: Response| {
+            res.send_file("./Cargo.lock").await
+        },
+    );
 
-    app.use_with("/hello", |_req: &mut Request, res: &mut Response| {
-        res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
-
-        next()
-    });
+    // /hello — X-Powered-By middleware then response
+    // app.use_with("/hello", async |_req: &mut Request, res: &mut Response| {
+    //     res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
+    //     stop_res()
+    // });
 
     app.get("/hello", async |_req: Request, res: Response| {
-        res.body("Hello, world")
+        res.body("Hello, world!")
             .header(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=86400"),
             )
             .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"))
-            .write("!")
     });
 
-    // Test app.route pattern
+    // Route builder pattern — multiple methods on the same path
     app.route("/api/v1/user")
-        .get(async |_req: Request, res: Response| res.send_text("Get User"))
-        .post(async |_req: Request, res: Response| res.send_text("Post User"));
+        .get(async |_req: Request, res: Response| {
+            res.send_text("Get User")
+        })
+        .post(async |_req: Request, res: Response| {
+            res.send_text("Post User")
+        });
 
-    // Test app.all pattern
+    // all() — matches every HTTP method
     app.all("/ping", async |_req: Request, res: Response| {
         res.send_text("pong")
     });
 
-    println!("{:?}", app.router.routes);
+    // Custom 404 handler
+    app.not_found(async |_req: Request, res: Response| {
+        res.status_code(404).send_text("Custom 404: Page not found!")
+    });
 
+    // ── Listen ──────────────────────────────────────────────────────────────
     app.listen(PORT, async || {
         let local_ip = local_ip().unwrap();
         info!("🚀 Server running!");

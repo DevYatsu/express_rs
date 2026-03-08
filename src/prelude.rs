@@ -3,9 +3,10 @@
 pub use crate::application::App;
 pub use crate::express;
 pub use crate::handler::{
-    ExpressResponse, FnHandler, Middleware, Request, Response,
+    ExpressResponse, Handler, Request, Response,
     request::{RequestExt, RequestState},
 };
 pub use crate::middleware::*;
 pub use crate::router::{MethodKind, Router};
+pub use crate::{handler, middleware};
 pub use hyper::StatusCode;

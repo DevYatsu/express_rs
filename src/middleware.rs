@@ -1,22 +1,17 @@
 use crate::application::App;
 use crate::handler::{Request, Response};
 use async_trait::async_trait;
-use futures_core::future::BoxFuture;
-use std::future::Future;
+use hyper::body::Incoming;
 
-pub type MiddlewareFuture<'a> = BoxFuture<'a, MiddlewareResult>;
-
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum MiddlewareResult {
     Next,
     Stop,
 }
 
-/// Trait for middleware handlers.
 #[async_trait]
-pub trait Middleware: Send + Sync + 'static {
-    /// The type of the handler that will be invoked if this middleware matches.
-    async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult;
+pub trait Middleware<B = Incoming>: Send + Sync + 'static {
+    async fn call(&self, req: &mut Request<B>, res: &mut Response) -> MiddlewareResult;
 }
 
 pub const fn next_res() -> MiddlewareResult {
@@ -26,13 +21,6 @@ pub const fn stop_res() -> MiddlewareResult {
     MiddlewareResult::Stop
 }
 
-pub fn next() -> MiddlewareFuture<'static> {
-    MiddlewareResult::Next.boxed()
-}
-pub fn stop() -> MiddlewareFuture<'static> {
-    MiddlewareResult::Stop.boxed()
-}
-
 impl MiddlewareResult {
     pub const fn is_next(&self) -> bool {
         matches!(self, MiddlewareResult::Next)
@@ -40,10 +28,6 @@ impl MiddlewareResult {
 
     pub const fn is_stop(&self) -> bool {
         matches!(self, MiddlewareResult::Stop)
-    }
-
-    pub fn boxed(self) -> MiddlewareFuture<'static> {
-        Box::pin(async move { self })
     }
 }
 
@@ -59,17 +43,22 @@ where
     }
 }
 
+// Submodules
 pub mod auth;
+mod cache;
 mod cors;
 mod limit_body;
 mod logging;
+mod normalize_path;
 mod rate_limit;
 mod security_headers;
 mod static_serve;
 
 pub use auth::AuthMiddleware;
+pub use cache::CacheMiddleware;
 pub use cors::CorsMiddleware;
 pub use logging::LoggingMiddleware;
+pub use normalize_path::NormalizePathMiddleware;
 pub use rate_limit::RateLimitMiddleware;
 pub use security_headers::SecurityHeadersMiddleware;
 pub use static_serve::StaticServeMiddleware;
@@ -77,26 +66,3 @@ pub use static_serve::StaticServeMiddleware;
 pub fn app() -> App<()> {
     App::with_state(())
 }
-
-// pub struct MiddlewareChain;
-
-// impl MiddlewareChain {
-//     pub fn new() -> Vec<Box<dyn Middleware + Send + Sync>> {
-//         vec![
-//             Box::new(LoggingMiddleware),
-//             Box::new(SecurityHeadersMiddleware),
-//             Box::new(CorsMiddleware::default()),
-//             Box::new(RateLimitMiddleware::default()),
-//             Box::new(BodySizeLimitMiddleware::default()),
-//             Box::new(CookieAuthMiddleware::default()),
-//         ]
-//     }
-
-//     pub fn basic() -> Vec<Box<dyn Middleware + Send + Sync>> {
-//         vec![
-//             Box::new(LoggingMiddleware),
-//             Box::new(SecurityHeadersMiddleware),
-//             Box::new(CorsMiddleware::default()),
-//         ]
-//     }
-// }

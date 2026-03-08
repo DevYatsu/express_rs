@@ -1,10 +1,10 @@
 use self::interner::INTERNER;
-use crate::handler::{
-    ExpressResponse, FnHandler, Middleware, Request, Response, request::RequestMetadataInternal,
-};
+use crate::{handler::{ExpressResponse, Handler, Request, Response, request::RequestMetadataInternal}, prelude::Middleware};
 use ahash::HashMap;
+use hyper::body::Incoming;
 use layer::Layer;
 use smallvec::{SmallVec, smallvec};
+use std::sync::Arc;
 
 pub mod interner;
 mod layer;
@@ -18,19 +18,19 @@ pub type LayerIndices = SmallVec<[usize; 8]>;
 pub struct MethodRouter {
     pub matcher: matchit::Router<usize>,
     pub indices: Vec<LayerIndices>,
-    pub path_to_idx: HashMap<String, usize>,
+    pub path_to_idx: HashMap<Arc<str>, usize>,
 }
 
 impl MethodRouter {
-    fn add_route(&mut self, path: &str, layer_index: usize) {
+    fn add_route(&mut self, path: &Arc<str>, layer_index: usize) {
         if let Some(&idx) = self.path_to_idx.get(path) {
             self.indices[idx].push(layer_index);
         } else {
             let idx = self.indices.len();
             self.indices.push(smallvec![layer_index]);
-            self.path_to_idx.insert(path.to_string(), idx);
+            self.path_to_idx.insert(Arc::clone(path), idx);
             self.matcher
-                .insert(path.to_string(), idx)
+                .insert(path.as_ref(), idx)
                 .expect("Failed to insert route");
         }
     }
@@ -38,7 +38,7 @@ impl MethodRouter {
 
 #[derive(Debug)]
 pub struct MiddlewareMatcher {
-    pub path: String,
+    pub path: Arc<str>,
     pub router: matchit::Router<()>,
     pub indices: LayerIndices,
 }
@@ -46,67 +46,66 @@ pub struct MiddlewareMatcher {
 pub type MethodRoutes = HashMap<MethodKind, MethodRouter>;
 
 /// The core routing engine for `express_rs`.
-///
-/// `Router` is responsible for registering route and middleware handlers,
-/// and efficiently dispatching them based on request paths and HTTP methods.
-#[derive(Debug, Default)]
-pub struct Router {
-    /// All layers (routes and middleware), stored in order of registration.
-    ///
-    /// Each `Layer` contains metadata and a handler function.
-    pub stack: Vec<Layer>,
-
-    /// Path-based matchers for global middleware.
-    ///
-    /// Middlewares are evaluated against all registered patterns.
+pub struct Router<B = Incoming> {
+    pub stack: Vec<Layer<B>>,
     pub middleware_matchers: Vec<MiddlewareMatcher>,
-
-    /// HTTP method-specific route matchers.
-    ///
-    /// For example, `Method::GET` maps to its own matcher tree.
     pub routes: MethodRoutes,
+    pub not_found_handler: Option<Arc<dyn Handler<B>>>,
 }
 
-impl Router {
+impl<B> Default for Router<B> {
+    fn default() -> Self {
+        Self {
+            stack: Vec::new(),
+            middleware_matchers: Vec::new(),
+            routes: HashMap::default(),
+            not_found_handler: None,
+        }
+    }
+}
+
+impl<B: Send + 'static> Router<B> {
     pub fn route(
         &mut self,
         path: impl AsRef<str>,
-        handler: impl FnHandler,
+        handler: impl Handler<B>,
         method: MethodKind,
-    ) -> &mut Layer {
-        let path_ref = path.as_ref();
+    ) -> &mut Layer<B> {
+        let mut p = path.as_ref();
+        if p.len() > 1 && p.ends_with('/') {
+            p = &p[..p.len() - 1];
+        }
+        let path: Arc<str> = p.into();
         let layer_index = self.stack.len();
 
         let method_routes = self.routes.entry(method).or_default();
-        method_routes.add_route(path_ref, layer_index);
+        method_routes.add_route(&path, layer_index);
 
-        let route = Layer::route(path_ref, method, handler);
-        self.stack.push(route);
+        let layer = Layer::route(Arc::clone(&path), method, vec![], Arc::new(handler));
+        self.stack.push(layer);
 
         self.stack.last_mut().unwrap()
     }
 
-    pub fn all(&mut self, path: impl AsRef<str>, handler: impl FnHandler + Clone) -> &mut Self {
-        let path = path.as_ref();
+    pub fn all(&mut self, path: impl AsRef<str>, handler: impl Handler<B> + Clone) -> &mut Self {
+        let path: Arc<str> = path.as_ref().into();
         for &method in &MethodKind::ALL {
-            self.route(path, handler.clone(), method);
+            self.route(path.as_ref(), handler.clone(), method);
         }
         self
     }
 
-    /// Returns a `Route` object for the specified path, allowing for method chaining.
-    /// This mirrors Express.js `app.route(path)`.
-    pub fn route_builder(&mut self, path: impl Into<String>) -> Route<'_> {
+    pub fn route_builder(&mut self, path: impl AsRef<str>) -> Route<'_, B> {
         Route {
             router: self,
-            path: path.into(),
+            path: path.as_ref().into(),
         }
     }
 
-    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware) -> &mut Self {
-        let path = path.as_ref();
+    pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
+        let path: Arc<str> = path.as_ref().into();
         let layer_index = self.stack.len();
-
+        
         let mut found = false;
         for matcher in &mut self.middleware_matchers {
             if matcher.path == path {
@@ -119,93 +118,33 @@ impl Router {
         if !found {
             let mut router = matchit::Router::new();
             router
-                .insert(path.to_string(), ())
+                .insert(path.as_ref(), ())
                 .expect("Failed to insert middleware");
             self.middleware_matchers.push(MiddlewareMatcher {
-                path: path.to_string(),
+                path: Arc::clone(&path),
                 router,
                 indices: smallvec![layer_index],
             });
         }
 
-        let middleware = Layer::middleware(path, middleware);
-        self.stack.push(middleware);
+        let layer = Layer::middleware(Arc::clone(&path), vec![Arc::new(middleware)]);
+        self.stack.push(layer);
 
         self
     }
 
-    /// Mounts another Router at the specified prefix path.
-    /// This works truly like Express (`app.use('/api', router)`), but it is
-    /// highly optimized! It flattens the nested router into the parent router,
-    /// avoiding runtime hierarchical traversal overhead entirely.
-    pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router) -> &mut Self {
-        let prefix = prefix.as_ref();
-        let prefix = prefix.trim_end_matches('/');
-
-        for layer in router.stack {
-            match layer {
-                Layer::Route {
-                    path,
-                    method,
-                    handler,
-                } => {
-                    let new_path = if path == "/" {
-                        prefix.to_string()
-                    } else {
-                        format!("{}{}", prefix, path)
-                    };
-
-                    let layer_index = self.stack.len();
-                    let method_routes = self.routes.entry(method).or_default();
-                    method_routes.add_route(&new_path, layer_index);
-
-                    self.stack.push(Layer::Route {
-                        path: new_path,
-                        method,
-                        handler,
-                    });
-                }
-                Layer::Middleware { path, handler } => {
-                    let new_path = if path.starts_with('/') {
-                        format!("{}{}", prefix, path)
-                    } else {
-                        format!("{}/{}", prefix, path)
-                    };
-
-                    let layer_index = self.stack.len();
-                    let mut found = false;
-                    for matcher in &mut self.middleware_matchers {
-                        if matcher.path == new_path {
-                            matcher.indices.push(layer_index);
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if !found {
-                        let mut r = matchit::Router::new();
-                        r.insert(new_path.clone(), ())
-                            .expect("Failed to insert nested middleware");
-                        self.middleware_matchers.push(MiddlewareMatcher {
-                            path: new_path.clone(),
-                            router: r,
-                            indices: smallvec![layer_index],
-                        });
-                    }
-
-                    self.stack.push(Layer::Middleware {
-                        path: new_path,
-                        handler,
-                    });
-                }
-            }
-        }
-
+    pub fn not_found(&mut self, handler: impl Handler<B>) -> &mut Self {
+        self.not_found_handler = Some(Arc::new(handler));
         self
     }
 
-    pub async fn handle(&self, mut req: Request, mut res: Response) -> Response {
-        let path = req.uri().path();
+    pub async fn handle(&self, mut req: Request<B>, res: Response) -> Response {
+        let raw_path = req.uri().path();
+        let path = if raw_path.len() > 1 && raw_path.ends_with('/') {
+            &raw_path[..raw_path.len() - 1]
+        } else {
+            raw_path
+        };
         let method = &MethodKind::from_hyper(req.method());
 
         let mut matched = SmallVec::<[&usize; 8]>::new();
@@ -240,16 +179,23 @@ impl Router {
             matched.extend(method_routes.indices[*route_match.value].iter());
         }
 
-        if matched.is_empty() {
-            // let's check other methods to return proper 405 or 404
+        if !path_exists {
             for (m, method_routes) in &self.routes {
                 if m != method && method_routes.matcher.at(path).is_ok() {
                     path_exists = true;
                     break;
                 }
             }
+        }
 
+        if matched.is_empty() {
             let status = if path_exists { 405 } else { 404 };
+
+            if status == 404 {
+                if let Some(h) = &self.not_found_handler {
+                    return h.call(req, res).await;
+                }
+            }
 
             return res.status_code(status).send_text(match status {
                 404 => "Not Found",
@@ -259,45 +205,102 @@ impl Router {
 
         req.set_params(route_params);
 
-        // sort and dedup
         matched.sort_unstable();
         matched.dedup();
 
-        #[cfg(debug_assertions)]
-        println!("Matched layers: {:?}", matched);
+        let mut req_opt = Some(req);
+        let mut res_opt = Some(res);
 
         for i in matched {
             let layer = &self.stack[*i];
 
-            match layer {
-                Layer::Middleware { .. } => {
-                    if layer
-                        .handle_middleware_request(&mut req, &mut res)
-                        .await
-                        .is_stop()
-                    {
-                        return res;
-                    };
-
+            if let Some(m) = &layer.method {
+                if m != method {
                     continue;
                 }
-                Layer::Route {
-                    method: route_method,
-                    ..
-                } => {
-                    if route_method != method {
-                        continue;
-                    }
+            }
 
-                    let res = layer.handle_fn_request(req, res).await;
-
-                    return res;
+            let mut stopped = false;
+            for mw in &layer.middlewares {
+                let req_mut = req_opt.as_mut().unwrap();
+                let res_mut = res_opt.as_mut().unwrap();
+                if mw.call(req_mut, res_mut).await.is_stop() {
+                    stopped = true;
+                    break;
                 }
-            };
+            }
+
+            if stopped {
+                return res_opt.unwrap();
+            }
+
+            if let Some(h) = &layer.handler {
+                return h.call(req_opt.take().unwrap(), res_opt.take().unwrap()).await;
+            }
         }
 
-        // no route matched
-        res.status_code(405).send_text("Method Not Allowed")
+        let status = if path_exists { 405 } else { 404 };
+
+        if status == 404 {
+            if let Some(h) = &self.not_found_handler {
+                return h.call(req_opt.take().unwrap(), res_opt.take().unwrap()).await;
+            }
+        }
+
+        res_opt.unwrap().status_code(status).send_text(match status {
+            404 => "Not Found",
+            _ => "Method Not Allowed",
+        })
+    }
+
+    pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router<B>) -> &mut Self {
+        let prefix = prefix.as_ref().trim_end_matches('/');
+
+        for layer in router.stack {
+            let new_path: Arc<str> = if layer.path.as_ref() == "/" {
+                prefix.into()
+            } else if layer.path.starts_with('/') {
+                format!("{}{}", prefix, layer.path.as_ref()).into()
+            } else {
+                format!("{}/{}", prefix, layer.path.as_ref()).into()
+            };
+
+            let layer_index = self.stack.len();
+
+            if let Some(method) = layer.method {
+                let method_routes = self.routes.entry(method).or_default();
+                method_routes.add_route(&new_path, layer_index);
+            } else {
+                let mut found = false;
+                for matcher in &mut self.middleware_matchers {
+                    if matcher.path == new_path {
+                        matcher.indices.push(layer_index);
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    let mut r = matchit::Router::new();
+                    r.insert(new_path.as_ref(), ())
+                        .expect("Failed to insert nested middleware");
+                    self.middleware_matchers.push(MiddlewareMatcher {
+                        path: Arc::clone(&new_path),
+                        router: r,
+                        indices: smallvec![layer_index],
+                    });
+                }
+            }
+
+            self.stack.push(Layer {
+                path: Arc::clone(&new_path),
+                method: layer.method,
+                middlewares: layer.middlewares,
+                handler: layer.handler,
+            });
+        }
+
+        self
     }
 }
 
@@ -307,95 +310,95 @@ macro_rules! define_methods {
         pub fn get(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Get)
         }
         pub fn post(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Post)
         }
         pub fn put(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Put)
         }
         pub fn delete(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Delete)
         }
         pub fn patch(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Patch)
         }
         pub fn head(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Head)
         }
         pub fn connect(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Connect)
         }
         pub fn trace(
             &mut self,
             path: impl AsRef<str>,
-            handler: impl $crate::handler::FnHandler,
+            handler: impl $crate::handler::Handler<B>,
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Trace)
         }
     };
     (route) => {
-        pub fn get(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn get(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Get)
         }
-        pub fn post(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn post(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Post)
         }
-        pub fn put(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn put(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Put)
         }
-        pub fn delete(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn delete(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Delete)
         }
-        pub fn patch(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn patch(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Patch)
         }
-        pub fn head(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn head(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Head)
         }
-        pub fn connect(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn connect(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Connect)
         }
-        pub fn trace(&mut self, handler: impl $crate::handler::FnHandler) -> &mut Self {
+        pub fn trace(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Trace)
         }
     };
 }
 
-impl Router {
+impl<B: Send + 'static> Router<B> {
     define_methods!();
 
     fn add_route(
         &mut self,
         path: impl AsRef<str>,
-        handler: impl FnHandler,
+        handler: impl Handler<B>,
         method: MethodKind,
     ) -> &mut Self {
         self.route(path, handler, method);
@@ -404,24 +407,31 @@ impl Router {
 }
 
 /// A route builder for a specific path, allowing for method chaining.
-/// Mirrored after Express.js `app.route(path)`.
-pub struct Route<'a> {
-    router: &'a mut Router,
-    path: String,
+pub struct Route<'a, B = Incoming> {
+    router: &'a mut Router<B>,
+    path: Arc<str>,
 }
 
-impl<'a> Route<'a> {
-    pub fn all(&mut self, handler: impl FnHandler + Clone) -> &mut Self {
+impl<'a, B: Send + 'static> Route<'a, B> {
+    pub fn all(&mut self, handler: impl Handler<B> + Clone) -> &mut Self {
         for &method in &MethodKind::ALL {
-            self.router.route(&self.path, handler.clone(), method);
+            self.router.route(self.path.as_ref(), handler.clone(), method);
         }
         self
     }
 
-    fn add_route(&mut self, handler: impl FnHandler, method: MethodKind) -> &mut Self {
-        self.router.route(&self.path, handler, method);
+    fn add_route(&mut self, handler: impl Handler<B>, method: MethodKind) -> &mut Self {
+        self.router.route(self.path.as_ref(), handler, method);
         self
     }
 
     define_methods!(route);
+}
+
+impl<B> std::fmt::Debug for Router<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Router")
+            .field("stack_len", &self.stack.len())
+            .finish()
+    }
 }

@@ -1,98 +1,49 @@
 use super::method::MethodKind;
-use crate::handler::{Request, Response, fn_handler::FnHandler};
-use crate::middleware::{self, Middleware};
+use crate::handler::Handler;
+use crate::middleware::Middleware;
+use hyper::body::Incoming;
 use std::{fmt::Debug, sync::Arc};
 
 /// Represents a single routing or middleware layer in the application.
-/// Similar to an Express.js layer, it holds a path matcher, an optional HTTP method,
-/// a handler, and optional route metadata.
-pub enum Layer {
-    /// A middleware layer that intercepts and processes requests.
-    Middleware {
-        /// The path prefix that this layer matches against.
-        path: String,
-        /// The handler that will be invoked if this layer matches.
-        handler: Arc<dyn Middleware>,
-    },
+pub struct Layer<B = Incoming> {
+    pub path: Arc<str>,
+    pub method: Option<MethodKind>, 
+    pub middlewares: Vec<Arc<dyn Middleware<B>>>,
+    pub handler: Option<Arc<dyn Handler<B>>>,
+}
 
-    /// A route layer that matches a method and path to a specific handler.
-    Route {
-        /// The path prefix that this layer matches against.
-        path: String,
-        /// The HTTP method this layer responds to (None for middleware).
+impl<B: Send + 'static> Layer<B> {
+    pub fn route(
+        path: Arc<str>,
         method: MethodKind,
-        /// The handler that will be invoked if this layer matches.
-        handler: Arc<dyn FnHandler>,
-    },
-}
-
-impl Layer {
-    pub fn route(path: impl AsRef<str>, method: MethodKind, handle: impl FnHandler) -> Self {
-        Self::Route {
-            path: path.as_ref().into(),
-            method,
-            handler: Arc::new(handle),
+        middlewares: Vec<Arc<dyn Middleware<B>>>,
+        handler: Arc<dyn Handler<B>>,
+    ) -> Self {
+        Self {
+            path,
+            method: Some(method),
+            middlewares,
+            handler: Some(handler),
         }
     }
 
-    pub fn middleware(path: impl AsRef<str>, handle: impl Middleware) -> Self {
-        Self::Middleware {
-            path: path.as_ref().into(),
-            handler: Arc::new(handle),
+    pub fn middleware(path: Arc<str>, middlewares: Vec<Arc<dyn Middleware<B>>>) -> Self {
+        Self {
+            path,
+            method: None,
+            middlewares,
+            handler: None,
         }
-    }
-
-    pub const fn path(&self) -> &str {
-        match self {
-            Layer::Middleware { path, .. } => path.as_str(),
-            Layer::Route { path, .. } => path.as_str(),
-        }
-    }
-
-    const fn get_middleware(&self) -> Option<&Arc<dyn Middleware>> {
-        match self {
-            Layer::Middleware { handler, .. } => Some(handler),
-            Layer::Route { .. } => None,
-        }
-    }
-
-    const fn get_route(&self) -> Option<&Arc<dyn FnHandler>> {
-        match self {
-            Layer::Route { handler, .. } => Some(handler),
-            Layer::Middleware { .. } => None,
-        }
-    }
-
-    // TODO ADD comments to say that fn should only get called if the layer is a route and we are SURE of that
-    pub async fn handle_fn_request(&self, req: Request, res: Response) -> Response {
-        let handler = self.get_route().unwrap();
-
-        handler.call(req, res).await
-    }
-
-    // TODO ADD comments to say that fn should only get called if the layer is a middleware and we are SURE of that
-    pub async fn handle_middleware_request(
-        &self,
-        req: &mut Request,
-        res: &mut Response,
-    ) -> middleware::MiddlewareResult {
-        let handler = self.get_middleware().unwrap();
-
-        handler.call(req, res).await
     }
 }
 
-impl Debug for Layer {
+impl<B> Debug for Layer<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Layer::Middleware { path, .. } => {
-                f.debug_struct("Middleware").field("path", path).finish()
-            }
-            Layer::Route { path, method, .. } => f
-                .debug_struct("Route")
-                .field("path", path)
-                .field("method", method)
-                .finish(),
-        }
+        f.debug_struct("Layer")
+            .field("path", &self.path)
+            .field("method", &self.method)
+            .field("middlewares_count", &self.middlewares.len())
+            .field("has_handler", &self.handler.is_some())
+            .finish()
     }
 }
