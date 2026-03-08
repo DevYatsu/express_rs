@@ -117,9 +117,21 @@ impl<B: Send + 'static> Router<B> {
 
         if !found {
             let mut router = matchit::Router::new();
-            router
-                .insert(path.as_ref(), ())
-                .expect("Failed to insert middleware");
+            let p = path.as_ref();
+            router.insert(p, ()).ok();
+            
+            // Express-style prefix matching: /path should match /path, /path/, and /path/sub
+            if p == "/" {
+                router.insert("/*middleware_wildcard", ()).ok();
+            } else {
+                let prefix_path = if p.ends_with('/') {
+                    format!("{}*middleware_wildcard", p)
+                } else {
+                    format!("{}/*middleware_wildcard", p)
+                };
+                router.insert(prefix_path, ()).ok();
+            }
+
             self.middleware_matchers.push(MiddlewareMatcher {
                 path: Arc::clone(&path),
                 router,
@@ -148,14 +160,13 @@ impl<B: Send + 'static> Router<B> {
         let method = &MethodKind::from_hyper(req.method());
 
         let mut matched = SmallVec::<[&usize; 8]>::new();
-        let mut route_params = SmallVec::<[(interner::Symbol, interner::Symbol); 4]>::new();
+        let mut route_params = SmallVec::<[(interner::Symbol, Arc<str>); 4]>::new();
 
         for matcher in &self.middleware_matchers {
             if let Ok(matched_route) = matcher.router.at(path) {
                 for (k, v) in matched_route.params.iter() {
                     let sym_k = INTERNER.get_or_intern(k);
-                    let sym_v = INTERNER.get_or_intern(v);
-                    route_params.push((sym_k, sym_v));
+                    route_params.push((sym_k, v.into()));
                 }
                 matched.extend(matcher.indices.iter());
             }
@@ -171,8 +182,7 @@ impl<B: Send + 'static> Router<B> {
             if !route_match.params.is_empty() {
                 for (k, v) in route_match.params.iter() {
                     let sym_k = INTERNER.get_or_intern(k);
-                    let sym_v = INTERNER.get_or_intern(v);
-                    route_params.push((sym_k, sym_v));
+                    route_params.push((sym_k, v.into()));
                 }
             }
 
@@ -205,8 +215,10 @@ impl<B: Send + 'static> Router<B> {
 
         req.set_params(route_params);
 
-        matched.sort_unstable();
-        matched.dedup();
+        if matched.len() > 1 {
+            matched.sort_unstable();
+            matched.dedup();
+        }
 
         let mut req_opt = Some(req);
         let mut res_opt = Some(res);

@@ -3,7 +3,7 @@ use hyper::header::{self, HeaderValue};
 use local_ip_address::local_ip;
 use log::info;
 use serde_json::json;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
 
 fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
@@ -20,19 +20,23 @@ fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+use express_rs::express_state;
+
 #[derive(Debug, Default)]
 pub struct State {
     request_count: AtomicU32,
 }
+
+express_state!(STATE, State, State::default());
 
 #[tokio::main]
 async fn main() {
     setup_logger().unwrap();
 
     const PORT: u16 = 9000;
-    let mut app = express().with_new_state(State::default());
+    let mut app = express();
 
-    // ── Middleware ──────────────────────────────────────────────────────────
+    // Middleware
     app.use_with("/{*p}", NormalizePathMiddleware::new())
         .use_with("/src/{*p}", StaticServeMiddleware::new("../express_rs/").max_age(86400))
         .use_with("/css/{*p}", StaticServeMiddleware::new("."))
@@ -42,10 +46,10 @@ async fn main() {
     #[cfg(debug_assertions)]
     app.use_with("/{*p}", LoggingMiddleware);
 
-    // ── Routes ──────────────────────────────────────────────────────────────
+    // Routes
 
-    // GET / — index page
-    app.get("/",async |req: Request, res: Response| {
+    // GET / - index page
+    app.get("/",async |_req: Request, res: Response| {        
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -68,21 +72,14 @@ async fn main() {
         </html>
         "#;
 
-        req.get_state::<State>()
-            .request_count
-            .fetch_add(1, Ordering::Relaxed);
-
         res.status_code(200)
             .content_type("text/html; charset=utf-8")
             .send_html(html)
     });
 
-    // GET /count — request counter
-    app.get("/count", async |req: Request, res: Response| {
-        let count = req
-            .get_state::<State>()
-            .request_count
-            .load(Ordering::Relaxed);
+    // GET /count - request counter
+    app.get("/count", async |_req: Request, res: Response| {
+        let count = STATE.request_count.fetch_add(1, Ordering::Relaxed);
 
         res.send_json(&json!({
             "request_count": count,
@@ -90,7 +87,7 @@ async fn main() {
         }))
     });
 
-    // GET /json — static JSON response
+    // GET /json - static JSON response
     app.get("/json", async |_req: Request, res: Response| {
         res.header(
             hyper::header::CACHE_CONTROL,
@@ -103,23 +100,23 @@ async fn main() {
         }))
     });
 
-    // GET /redirect — redirect to /
+    // GET /redirect - redirect to /
     app.get("/redirect", async |_req: Request, res: Response| {
         res.redirect("/")
     });
 
-    // GET /status — always 400
+    // GET /status - always 400
     app.get("/status", async |_req:  Request, res: Response| {
         res.status_code(400).send_text("400 Bad Request")
     });
 
-    // GET /status/:status — echo status param
+    // GET /status/:status - echo status param
     app.get("/status/{status}", async |req: Request, res: Response| {
         let value = req.params().get("status").unwrap_or("unknown");
         res.send_text(format!("Status is {value}"))
     });
 
-    // GET /file — stream Cargo.lock (async, borrows res across await)
+    // GET /file - stream Cargo.lock (async, borrows res across await)
     app.get(
         "/file",
         async|_req: Request, res: Response| {
@@ -127,7 +124,7 @@ async fn main() {
         },
     );
 
-    // /hello — X-Powered-By middleware then response
+    // /hello - X-Powered-By middleware then response
     // app.use_with("/hello", async |_req: &mut Request, res: &mut Response| {
     //     res.header("x-powered-by", HeaderValue::from_static("DevYatsu"));
     //     stop_res()
@@ -142,7 +139,7 @@ async fn main() {
             .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html"))
     });
 
-    // Route builder pattern — multiple methods on the same path
+    // Route builder pattern - multiple methods on the same path
     app.route("/api/v1/user")
         .get(async |_req: Request, res: Response| {
             res.send_text("Get User")
@@ -151,7 +148,7 @@ async fn main() {
             res.send_text("Post User")
         });
 
-    // all() — matches every HTTP method
+    // all() - matches every HTTP method
     app.all("/ping", async |_req: Request, res: Response| {
         res.send_text("pong")
     });

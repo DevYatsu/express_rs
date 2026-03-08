@@ -1,4 +1,5 @@
 use express_rs::prelude::*;
+use async_trait::async_trait;
 use serde_json::json;
 
 // Define standard async handlers
@@ -16,7 +17,7 @@ async fn post_handler<B: Send + 'static>(_req: Request<B>, res: Response) -> Res
 
 #[tokio::test]
 async fn test_app_all() {
-    let mut app = App::<(), ()>::with_state(());
+    let mut app = App::<()>::default();
 
     app.all("/test", all_handler);
 
@@ -49,7 +50,7 @@ async fn test_app_all() {
 
 #[tokio::test]
 async fn test_app_route() {
-    let mut app = App::<(), ()>::with_state(());
+    let mut app = App::<()>::default();
     app.route("/user")
         .get(get_handler)
         .post(post_handler);
@@ -104,7 +105,7 @@ async fn final_handler<B: Send + 'static>(req: Request<B>, res: Response) -> Res
 
 #[tokio::test]
 async fn test_request_locals_persistence() {
-    let mut app = App::<(), ()>::with_state(());
+    let mut app = App::<()>::default();
 
     app.use_with("/", LocalsMiddleware);
     app.get("/final", final_handler);

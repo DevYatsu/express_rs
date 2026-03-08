@@ -50,7 +50,7 @@ pub trait RequestExt<B = Incoming> {
 
 /// Internal trait used to attach request metadata during server processing.
 pub(crate) trait RequestMetadataInternal {
-    fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>);
+    fn set_params(&mut self, params: SmallVec<[(Symbol, Arc<str>); 4]>);
     fn set_metadata(&mut self, addr: SocketAddr, is_tls: bool);
 }
 
@@ -149,41 +149,25 @@ impl<B> RequestExt<B> for Request<B> {
 }
 
 #[derive(Debug, Clone)]
-pub struct RouteParams(SmallVec<[(Symbol, Symbol); 4]>);
+pub struct RouteParams(SmallVec<[(Symbol, Arc<str>); 4]>);
 
 impl RouteParams {
     /// Look up a route parameter by name.
     ///
     /// Returns `None` if the parameter does not exist.
-    pub fn get(&self, key: &str) -> Option<&'static str> {
+    pub fn get(&self, key: &str) -> Option<&str> {
         use crate::router::interner::INTERNER;
         let sym_key = INTERNER.get(key)?;
         self.0
             .iter()
             .find(|(k, _)| *k == sym_key)
-            .and_then(|(_, v)| INTERNER.resolve(*v))
+            .map(|(_, v)| v.as_ref())
     }
 }
 
-pub trait RequestState<B = Incoming> {
-    fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S>;
-    fn set_state<S: Sync + Send + 'static>(&mut self, state: S);
-}
-
-impl<B> RequestState<B> for Request<B> {
-    fn get_state<S: Sync + Send + 'static>(&self) -> &Arc<S> {
-        self.extensions()
-            .get::<Arc<S>>()
-            .expect("State must be registered before accessing it")
-    }
-
-    fn set_state<S: Sync + Send + 'static>(&mut self, state: S) {
-        self.extensions_mut().insert(Arc::new(state));
-    }
-}
 
 impl<B> RequestMetadataInternal for Request<B> {
-    fn set_params(&mut self, params: SmallVec<[(Symbol, Symbol); 4]>) {
+    fn set_params(&mut self, params: SmallVec<[(Symbol, Arc<str>); 4]>) {
         self.extensions_mut().insert(RouteParams(params));
     }
 

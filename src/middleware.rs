@@ -63,6 +63,6 @@ pub use rate_limit::RateLimitMiddleware;
 pub use security_headers::SecurityHeadersMiddleware;
 pub use static_serve::StaticServeMiddleware;
 
-pub fn app() -> App<()> {
-    App::with_state(())
+pub fn app() -> App {
+    App::default()
 }

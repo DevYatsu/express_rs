@@ -4,7 +4,7 @@ use cookie::Cookie;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::header::{
-    CONTENT_LENGTH, CONTENT_TYPE, EXPIRES, HeaderValue, IntoHeaderName, LOCATION, SERVER,
+    CONTENT_TYPE, EXPIRES, HeaderValue, IntoHeaderName, LOCATION, SERVER,
     SET_COOKIE, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use hyper::{StatusCode};
@@ -18,6 +18,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::sync::Mutex;
+use futures_util::StreamExt;
+use http_body_util::StreamBody;
+use hyper::body::Frame;
+use tokio_util::io::ReaderStream;
+use std::pin::Pin;
 
 #[derive(Error, Debug)]
 pub enum ResponseError {
@@ -43,10 +48,25 @@ pub struct Response {
     pub error: Option<ResponseError>,
 }
 
-#[derive(Debug)]
 pub enum ResponseBody {
     Empty,
-    Buffered(Bytes),
+    Buffered(Vec<Bytes>),
+    Stream(Pin<Box<dyn futures_util::Stream<Item = Result<Frame<Bytes>, io::Error>> + Send + Sync>>),
+}
+
+impl std::fmt::Debug for ResponseBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResponseBody::Empty => write!(f, "Empty"),
+            ResponseBody::Buffered(chunks) => f.debug_tuple("Buffered").field(chunks).finish(),
+            ResponseBody::Stream(_) => write!(f, "Stream(...)"),
+        }
+    }
+}
+impl ResponseBody {
+    pub fn is_empty(&self) -> bool {
+        matches!(self, ResponseBody::Empty)
+    }
 }
 
 impl Default for ResponseBody {
@@ -137,27 +157,47 @@ impl Response {
         self.status
     }
 
-    pub fn into_hyper(self) -> ServerResponse {
-        let builder = hyper::Response::builder().status(self.status);
-
-        let body = match self.body {
-            ResponseBody::Empty => Bytes::new(),
-            ResponseBody::Buffered(b) => b,
+    pub fn into_hyper(mut self) -> ServerResponse {
+        let body: BoxBody<Bytes, std::convert::Infallible> = match self.body {
+            ResponseBody::Empty => Full::new(Bytes::new()).map_err(|n| match n {}).boxed(),
+            ResponseBody::Buffered(mut chunks) => {
+                if chunks.is_empty() {
+                    Full::new(Bytes::new()).map_err(|n| match n {}).boxed()
+                } else if chunks.len() == 1 {
+                    Full::new(chunks.pop().unwrap()).map_err(|n| match n {}).boxed()
+                } else {
+                    let mut ret = bytes::BytesMut::with_capacity(chunks.iter().map(|c| c.len()).sum());
+                    for chunk in chunks {
+                        ret.extend_from_slice(&chunk);
+                    }
+                    Full::new(ret.freeze()).map_err(|n| match n {}).boxed()
+                }
+            }
+            ResponseBody::Stream(stream) => {
+                StreamBody::new(stream)
+                    .map_err(|_e| {
+                        // In practice, since ServerResponse expects Infallible,
+                        // we can't propagate this error easily without changing types.
+                        // For now we ignore it, but ideally we'd log it.
+                        unreachable!("Stream error occurred but response body is Infallible")
+                    })
+                    .boxed()
+            }
         };
 
-        let mut res = builder
-            .body(Full::new(body).map_err(|never| match never {}).boxed())
+        let mut hyper_res = hyper::Response::builder()
+            .status(self.status)
+            .body(body)
             .unwrap();
 
-        let headers = res.headers_mut();
+        let headers = hyper_res.headers_mut();
+        // Insert default headers first, then user headers (user headers override defaults)
         for (k, v) in DEFAULT_HEADERS.iter() {
             headers.insert(k, v.clone());
         }
-        for (k, v) in self.headers.iter() {
-            headers.insert(k, v.clone());
-        }
+        headers.extend(self.headers.drain());
 
-        res
+        hyper_res
     }
 
     pub fn respond_error(
@@ -217,28 +257,33 @@ impl Response {
             mime.to_string()
         };
 
-        self = self.content_type(&content_type);
-        if let Ok(val) = HeaderValue::from_str(&metadata.len().to_string()) {
-            self.headers.insert(CONTENT_LENGTH, val);
-        }
-
-        use tokio::io::AsyncReadExt;
-        let mut buf = Vec::new();
-        let mut f = file;
-        if let Err(e) = f.read_to_end(&mut buf).await {
-            self.error = Some(ResponseError::FileOpenError(e));
-            return self;
-        }
-        let bytes = Bytes::from(buf);
-
         if metadata.len() < 1024 * 1024 {
+            let bytes = match tokio::fs::read(path_str).await {
+                Ok(b) => Bytes::from(b),
+                Err(e) => {
+                    self.error = Some(ResponseError::FileOpenError(e));
+                    return self;
+                }
+            };
+
             FILE_CACHE.lock().await.put(
                 path_str.to_string(),
                 (content_type, Arc::new(bytes.clone())),
             );
-        }
 
-        self.body(bytes)
+            self.body(bytes)
+        } else {
+            let file = match File::open(path_str).await {
+                Ok(f) => f,
+                Err(e) => {
+                    self.error = Some(ResponseError::FileOpenError(e));
+                    return self;
+                }
+            };
+            let stream = ReaderStream::new(file).map(|res| res.map(Frame::data));
+            self.body = ResponseBody::Stream(Box::pin(stream));
+            self
+        }
     }
 
     pub async fn send_file<T: AsRef<str>>(self, path: T) -> Self {
@@ -246,196 +291,118 @@ impl Response {
     }
 }
 
-impl ExpressResponse for Response {
-    fn status(mut self, status: StatusCode) -> Self {
-        self.status = status;
-        self
-    }
-
-    fn status_code(mut self, code: u16) -> Self {
-        match StatusCode::from_u16(code) {
-            Ok(s) => self.status = s,
-            Err(_) => self.error = Some(ResponseError::InvalidStatusCode(code)),
-        }
-        self
-    }
-
-    fn header<K, V>(mut self, key: K, value: V) -> Self
-    where
-        K: IntoHeaderName,
-        V: Into<HeaderValue>,
-    {
-        self.headers.insert(key, value.into());
-        self
-    }
-
-    fn content_type<T: AsRef<str>>(mut self, mime_type: T) -> Self {
-        if let Ok(val) = HeaderValue::from_str(mime_type.as_ref()) {
-            self.headers.insert(CONTENT_TYPE, val);
-        }
-        self
-    }
-
-    fn location<T: AsRef<str>>(mut self, url: T) -> Self {
-        self.headers
-            .insert(LOCATION, sanitize_header_value(url.as_ref()));
-        self
-    }
-
-    fn body<T: Into<Bytes>>(mut self, data: T) -> Self {
-        self.body = ResponseBody::Buffered(data.into());
-        self
-    }
-
-    fn write<T: Into<Bytes>>(mut self, data: T) -> Self {
-        let bytes = data.into();
-        match &mut self.body {
-            ResponseBody::Buffered(existing) => {
-                *existing = [existing.as_ref(), bytes.as_ref()].concat().into();
+macro_rules! impl_express_response {
+    ($target:ty) => {
+        impl ExpressResponse for $target {
+            #[allow(unused_mut)]
+            fn status(mut self, status: StatusCode) -> Self {
+                self.status = status;
+                self
             }
-            _ => {
-                self.body = ResponseBody::Buffered(bytes);
+
+            #[allow(unused_mut)]
+            fn status_code(mut self, code: u16) -> Self {
+                match StatusCode::from_u16(code) {
+                    Ok(s) => self.status = s,
+                    Err(_) => self.error = Some(ResponseError::InvalidStatusCode(code)),
+                }
+                self
             }
-        }
-        self
-    }
 
-    fn send_text<T: Into<Cow<'static, str>>>(self, text: T) -> Self {
-        let cow = text.into();
-        let bytes = match cow {
-            Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-            Cow::Owned(s) => Bytes::from(s),
-        };
-        self.content_type("text/plain; charset=utf-8").body(bytes)
-    }
-
-    fn send_html<T: Into<Cow<'static, str>>>(self, html: T) -> Self {
-        let cow = html.into();
-        let bytes = match cow {
-            Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-            Cow::Owned(s) => Bytes::from(s),
-        };
-        self.content_type("text/html; charset=utf-8").body(bytes)
-    }
-
-    fn send_json<T: Serialize>(self, data: &T) -> Self {
-        match serde_json::to_vec(data) {
-            Ok(json) => self.content_type("application/json").body(json),
-            Err(e) => {
-                let mut s = self;
-                s.error = Some(ResponseError::JsonSerializationError(e));
-                s
+            #[allow(unused_mut)]
+            fn header<K, V>(mut self, key: K, value: V) -> Self
+            where
+                K: IntoHeaderName,
+                V: Into<HeaderValue>,
+            {
+                self.headers.insert(key, value.into());
+                self
             }
-        }
-    }
 
-    fn redirect<T: AsRef<str>>(mut self, url: T) -> Self {
-        self.status = StatusCode::FOUND;
-        self.location(url)
-    }
-
-    fn cookie(mut self, cookie: Cookie<'_>) -> Self {
-        if let Ok(val) = HeaderValue::from_str(&cookie.to_string()) {
-            self.headers.append(SET_COOKIE, val);
-        }
-        self
-    }
-}
-
-impl ExpressResponse for &mut Response {
-    fn status(self, status: StatusCode) -> Self {
-        self.status = status;
-        self
-    }
-
-    fn status_code(self, code: u16) -> Self {
-        match StatusCode::from_u16(code) {
-            Ok(s) => self.status = s,
-            Err(_) => self.error = Some(ResponseError::InvalidStatusCode(code)),
-        }
-        self
-    }
-
-    fn header<K, V>(self, key: K, value: V) -> Self
-    where
-        K: IntoHeaderName,
-        V: Into<HeaderValue>,
-    {
-        self.headers.insert(key, value.into());
-        self
-    }
-
-    fn content_type<T: AsRef<str>>(self, mime_type: T) -> Self {
-        if let Ok(val) = HeaderValue::from_str(mime_type.as_ref()) {
-            self.headers.insert(CONTENT_TYPE, val);
-        }
-        self
-    }
-
-    fn location<T: AsRef<str>>(self, url: T) -> Self {
-        self.headers
-            .insert(LOCATION, sanitize_header_value(url.as_ref()));
-        self
-    }
-
-    fn body<T: Into<Bytes>>(self, data: T) -> Self {
-        self.body = ResponseBody::Buffered(data.into());
-        self
-    }
-
-    fn write<T: Into<Bytes>>(self, data: T) -> Self {
-        let bytes = data.into();
-        match &mut self.body {
-            ResponseBody::Buffered(existing) => {
-                *existing = [existing.as_ref(), bytes.as_ref()].concat().into();
+            #[allow(unused_mut)]
+            fn content_type<T: AsRef<str>>(mut self, mime_type: T) -> Self {
+                if let Ok(val) = HeaderValue::from_str(mime_type.as_ref()) {
+                    self.headers.insert(CONTENT_TYPE, val);
+                }
+                self
             }
-            _ => {
-                self.body = ResponseBody::Buffered(bytes);
+
+            #[allow(unused_mut)]
+            fn location<T: AsRef<str>>(mut self, url: T) -> Self {
+                self.headers
+                    .insert(LOCATION, sanitize_header_value(url.as_ref()));
+                self
             }
-        }
-        self
-    }
 
-    fn send_text<T: Into<Cow<'static, str>>>(self, text: T) -> Self {
-        let cow = text.into();
-        let bytes = match cow {
-            Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-            Cow::Owned(s) => Bytes::from(s),
-        };
-        self.content_type("text/plain; charset=utf-8").body(bytes)
-    }
+            #[allow(unused_mut)]
+            fn body<T: Into<Bytes>>(mut self, data: T) -> Self {
+                self.body = ResponseBody::Buffered(vec![data.into()]);
+                self
+            }
 
-    fn send_html<T: Into<Cow<'static, str>>>(self, html: T) -> Self {
-        let cow = html.into();
-        let bytes = match cow {
-            Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-            Cow::Owned(s) => Bytes::from(s),
-        };
-        self.content_type("text/html; charset=utf-8").body(bytes)
-    }
+            #[allow(unused_mut)]
+            fn write<T: Into<Bytes>>(mut self, data: T) -> Self {
+                let bytes = data.into();
+                match &mut self.body {
+                    ResponseBody::Buffered(chunks) => {
+                        chunks.push(bytes);
+                    }
+                    _ => {
+                        self.body = ResponseBody::Buffered(vec![bytes]);
+                    }
+                }
+                self
+            }
 
-    fn send_json<T: Serialize>(self, data: &T) -> Self {
-        match serde_json::to_vec(data) {
-            Ok(json) => self.content_type("application/json").body(json),
-            Err(e) => {
-                self.error = Some(ResponseError::JsonSerializationError(e));
+            fn send_text<T: Into<Cow<'static, str>>>(self, text: T) -> Self {
+                let cow = text.into();
+                let bytes = match cow {
+                    Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
+                    Cow::Owned(s) => Bytes::from(s),
+                };
+                self.content_type("text/plain; charset=utf-8").body(bytes)
+            }
+
+            fn send_html<T: Into<Cow<'static, str>>>(self, html: T) -> Self {
+                let cow = html.into();
+                let bytes = match cow {
+                    Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
+                    Cow::Owned(s) => Bytes::from(s),
+                };
+                self.content_type("text/html; charset=utf-8").body(bytes)
+            }
+
+            #[allow(unused_mut)]
+            fn send_json<T: Serialize>(self, data: &T) -> Self {
+                match serde_json::to_vec(data) {
+                    Ok(json) => self.content_type("application/json").body(json),
+                    Err(e) => {
+                        let mut s = self;
+                        s.error = Some(ResponseError::JsonSerializationError(e));
+                        s
+                    }
+                }
+            }
+
+            #[allow(unused_mut)]
+            fn redirect<T: AsRef<str>>(mut self, url: T) -> Self {
+                self.status = StatusCode::FOUND;
+                self.location(url)
+            }
+
+            #[allow(unused_mut)]
+            fn cookie(mut self, cookie: Cookie<'_>) -> Self {
+                if let Ok(val) = HeaderValue::from_str(&cookie.to_string()) {
+                    self.headers.append(SET_COOKIE, val);
+                }
                 self
             }
         }
-    }
-
-    fn redirect<T: AsRef<str>>(self, url: T) -> Self {
-        self.status = StatusCode::FOUND;
-        self.location(url)
-    }
-
-    fn cookie(self, cookie: Cookie<'_>) -> Self {
-        if let Ok(val) = HeaderValue::from_str(&cookie.to_string()) {
-            self.headers.append(SET_COOKIE, val);
-        }
-        self
-    }
+    };
 }
+
+impl_express_response!(Response);
+impl_express_response!(&mut Response);
 
 fn sanitize_header_value(val: &str) -> HeaderValue {
     HeaderValue::from_str(val).unwrap_or_else(|_| HeaderValue::from_static(""))
