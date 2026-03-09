@@ -1,4 +1,7 @@
-use super::{config::CookieAuthConfig, error::{AuthError, AuthResult}};
+use super::{
+    config::CookieAuthConfig,
+    error::{AuthError, AuthResult},
+};
 use crate::handler::Request;
 use cookie::{Cookie, CookieJar};
 use hyper::header::COOKIE;

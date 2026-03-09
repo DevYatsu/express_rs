@@ -1,11 +1,16 @@
 #![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 
 mod application;
+/// Handlers and utilities for incoming HTTP requests and responses.
 pub mod handler;
+/// Middleware traits and implementations for request processing.
 pub mod middleware;
+/// Routing logic, method dispatchers, and route definitions.
 pub mod router;
 mod server;
 
+/// Re-exported items necessary for express_rs functionality.
 pub mod prelude;
 
 /// Helper macro to initialize a high-performance global state.
@@ -20,6 +25,7 @@ macro_rules! express_state {
     };
 }
 
+/// Helper re-exports used by the macro.
 pub mod reexports {
     pub use once_cell::sync::Lazy;
 }

@@ -22,12 +22,14 @@ struct SessionData {
 }
 
 impl SessionTokenValidator {
+    /// Creates a new default session token validator.
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
         }
     }
 
+    /// Adds a valid session to the in-memory cache.
     pub async fn add_session(
         &self,
         token: String,
@@ -44,15 +46,18 @@ impl SessionTokenValidator {
         self.sessions.insert(token, session_data);
     }
 
+    /// Deletes a session by its token.
     pub async fn remove_session(&self, token: &str) {
         self.sessions.remove(token);
     }
 
+    /// Clears expired entries out of the session store.
     pub async fn cleanup_expired_sessions(&self) {
         let now = std::time::Instant::now();
         self.sessions.retain(|_, session| session.expires_at > now);
     }
 
+    /// Refreshes the last-accessed timestamp for a session.
     pub async fn update_last_accessed(&self, token: &str) -> AuthResult<()> {
         if let Some(mut session) = self.sessions.get_mut(token) {
             session.last_accessed = std::time::Instant::now();

@@ -13,6 +13,7 @@ pub struct AuthMiddlewareBuilder {
 }
 
 impl AuthMiddlewareBuilder {
+    /// Creates a new, empty builder for AuthMiddleware.
     pub fn new() -> Self {
         Self {
             config: CookieAuthConfig::default(),
@@ -20,52 +21,62 @@ impl AuthMiddlewareBuilder {
         }
     }
 
+    /// Sets the cookie name for authentication.
     pub fn cookie_name(mut self, name: impl Into<String>) -> Self {
         self.config.cookie_name = name.into();
         self
     }
 
+    /// Defines the redirect target when unauthenticated.
     pub fn login_redirect(mut self, redirect: impl Into<String>) -> Self {
         self.config.login_redirect = redirect.into();
         self
     }
 
+    /// Specifies whether secure cookies only should be accepted.
     pub fn secure_cookies(mut self, secure: bool) -> Self {
         self.config.secure_cookies = secure;
         self
     }
 
+    /// Sets the auth cookie domain.
     pub fn cookie_domain(mut self, domain: impl Into<String>) -> Self {
         self.config.cookie_domain = Some(domain.into());
         self
     }
 
+    /// Sets the auth cookie path.
     pub fn cookie_path(mut self, path: impl Into<String>) -> Self {
         self.config.cookie_path = path.into();
         self
     }
 
+    /// Sets the same-site policy on the auth cookie.
     pub fn same_site(mut self, same_site: cookie::SameSite) -> Self {
         self.config.same_site = Some(same_site);
         self
     }
 
+    /// Configures token length limits.
     pub fn token_length_limits(mut self, min: usize, max: usize) -> Self {
         self.config.min_token_length = min;
         self.config.max_token_length = max;
         self
     }
 
+    /// Enables or disables auth logging.
     pub fn enable_logging(mut self, enable: bool) -> Self {
         self.config.enable_logging = enable;
         self
     }
 
+    /// Protects a specific route level dynamically.
     pub fn protect_route(mut self, route: impl Into<String>, level: AuthLevel) -> Self {
         let _ = self.protected_routes.insert(route.into(), level);
         self
     }
 
+    /// Overwrites the full set of protected routes.
     pub fn protect_routes(mut self, routes: matchit::Router<AuthLevel>) -> Self {
         // matchit doesn't have merge, so just assign it if we don't need to merge, or we couldn't merge.
         // For simplicity, we can just replace.
@@ -73,14 +84,17 @@ impl AuthMiddlewareBuilder {
         self
     }
 
+    /// Finalizes the builder by producing a JWT-based AuthMiddleware.
     pub fn build_with_jwt(self, jwt_validator: JwtTokenValidator) -> AuthMiddleware {
         AuthMiddleware::with_jwt(self.config, self.protected_routes, jwt_validator)
     }
 
+    /// Finalizes the builder by producing a Session-based AuthMiddleware.
     pub fn build_with_sessions(self, validator: SessionTokenValidator) -> AuthMiddleware {
         AuthMiddleware::with_sessions(self.config, self.protected_routes, validator)
     }
 
+    /// Finalizes the builder using a generic TokenValidator backend.
     pub fn build_with_validator(self, validator: Arc<dyn TokenValidator>) -> AuthMiddleware {
         AuthMiddleware::with_validator(self.config, self.protected_routes, validator)
     }

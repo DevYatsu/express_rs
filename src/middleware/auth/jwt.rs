@@ -21,6 +21,7 @@ pub struct JwtTokenValidator {
 }
 
 impl JwtTokenValidator {
+    /// Creates a new JwtTokenValidator given a secret string.
     pub fn new(secret: impl Into<String>) -> Self {
         Self {
             secret: secret.into(),
@@ -29,11 +30,13 @@ impl JwtTokenValidator {
         }
     }
 
+    /// Limits the validation to a specific issuer.
     pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
         self.issuer = Some(issuer.into());
         self
     }
 
+    /// Limits the validation to a specific audience.
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audience = Some(audience.into());
         self

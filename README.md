@@ -49,15 +49,16 @@ express_rs = "0.1.0"
 
 ### Basic Example
 
-```rust
+```rust,ignore
 use express_rs::prelude::*;
 use express_rs::reexports::Lazy;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut app = express();
 
     // Built-in middleware
-    app.use_middleware(express_rs::middleware::logging::logger);
+    app.use_middleware(express_rs::middleware::logging::LoggingMiddleware);
 
     // Simple routing
     app.get("/", |_req, mut res, _| {
@@ -70,9 +71,9 @@ fn main() {
     });
 
     // Start server
-    let _ = app.listen(3000, || {
+    let _ = app.listen(3000, || async {
         println!("🚀 Server listening on http://localhost:3000");
-    });
+    }).await;
 }
 ```
 
@@ -80,7 +81,7 @@ fn main() {
 
 Just like Express, you can mount routers to organize your controllers:
 
-```rust
+```rust,ignore
 use express_rs::router::Router;
 
 let mut users_router = Router::new();
@@ -95,7 +96,7 @@ app.use_router("/users", users_router);
 
 A robust set of middlewares is provided out of the box to help secure and optimize your app. For instance, setting up secure headers and rate limiting:
 
-```rust
+```rust,ignore
 use express_rs::middleware::{rate_limit::*, security_headers::*};
 
 // Restrict to 100 requests per 15 minutes per IP

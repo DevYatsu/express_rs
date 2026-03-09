@@ -8,6 +8,7 @@ use hyper::header::{
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
+/// Middleware that serves static files from a root directory.
 #[derive(Debug, Clone)]
 pub struct StaticServeMiddleware {
     root: String,

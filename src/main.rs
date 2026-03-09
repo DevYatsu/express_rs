@@ -156,7 +156,7 @@ async fn main() {
             .send_text("Custom 404: Page not found!")
     });
 
-    // ── Listen ──────────────────────────────────────────────────────────────
+    // Listen
     app.listen(PORT, async || {
         let local_ip = local_ip().unwrap();
         info!("🚀 Server running!");

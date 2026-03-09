@@ -10,11 +10,15 @@ pub type Request<B = Incoming> = HRequest<B>;
 
 /// Wraps the client's socket address for injection into request extensions.
 #[derive(Debug, Clone, Copy)]
-pub struct ClientAddr(pub SocketAddr);
+pub struct ClientAddr(
+    /// The actual socket address of the client
+    pub SocketAddr
+);
 
 /// Wraps TLS connection status for injection into request extensions.
 #[derive(Debug, Clone, Copy)]
 pub struct TlsInfo {
+    /// Indicates whether the request connection is secure via TLS.
     pub is_secure: bool,
 }
 
@@ -25,25 +29,37 @@ pub struct TlsInfo {
 #[derive(Debug, Clone, Default)]
 pub struct Locals(pub FxHashMap<String, serde_json::Value>);
 
-
 use async_trait::async_trait;
 use http_body_util::BodyExt;
 
 /// Extension trait for [`Request`] to provide Express.js-like properties.
 #[async_trait]
 pub trait RequestExt<B = Incoming> {
+    /// Returns the parsed route parameters.
     fn params(&self) -> &RouteParams;
+    /// Returns the requested path.
     fn path(&self) -> &str;
+    /// Returns the requested query parameter.
     fn query(&self, key: &str) -> Option<String>;
+    /// Returns the specified HTTP header value.
     fn get_header(&self, key: &str) -> Option<&str>;
+    /// Returns the requested host name from the headers.
     fn host_name(&self) -> Option<&str>;
+    /// Returns the remote socket address.
     fn ip(&self) -> Option<SocketAddr>;
+    /// Returns true if the request was an XMLHttpRequest.
     fn xhr(&self) -> bool;
+    /// Checks if the request's Content-Type matches the given string.
     fn is(&self, content_type_to_match: &str) -> bool;
+    /// Returns true if the request prefers a JSON response based on the Accept header.
     fn prefers_json(&self) -> bool;
+    /// Returns true if the request is running over a secure TLS connection.
     fn secure(&self) -> bool;
+    /// Returns the request-scoped locals.
     fn locals(&self) -> &Locals;
+    /// Returns a mutable reference to the request-scoped locals.
     fn locals_mut(&mut self) -> &mut Locals;
+    /// Parses the request body as JSON.
     async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T, crate::handler::ResponseError>
     where
         B: BodyExt + Send + Unpin + 'static,
@@ -113,15 +129,9 @@ impl<B> RequestExt<B> for Request<B> {
             "json" => content_type
                 .to_ascii_lowercase()
                 .contains("application/json"),
-            "html" => content_type
-                .to_ascii_lowercase()
-                .contains("text/html"),
-            "text" => content_type
-                .to_ascii_lowercase()
-                .contains("text/plain"),
-            _ => content_type
-                .to_ascii_lowercase()
-                .contains(m.as_str()),
+            "html" => content_type.to_ascii_lowercase().contains("text/html"),
+            "text" => content_type.to_ascii_lowercase().contains("text/plain"),
+            _ => content_type.to_ascii_lowercase().contains(m.as_str()),
         }
     }
 
@@ -168,8 +178,12 @@ impl<B> RequestExt<B> for Request<B> {
     }
 }
 
+/// Parsed route parameters from the request URI.
 #[derive(Debug, Clone)]
-pub struct RouteParams(SmallVec<[(Symbol, Arc<str>); 4]>);
+pub struct RouteParams(
+    /// Internal representation of the route parameters.
+    SmallVec<[(Symbol, Arc<str>); 4]>
+);
 
 impl RouteParams {
     /// Look up a route parameter by name.

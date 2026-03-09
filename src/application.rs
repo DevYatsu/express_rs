@@ -10,6 +10,7 @@ use tokio_rustls::rustls::ServerConfig;
 
 /// The main application structure for `express_rs`.
 pub struct App<B: Send + 'static = Incoming> {
+    /// The inner router used by the application to match and handle paths.
     pub router: Router<B>,
 }
 
@@ -22,6 +23,8 @@ impl<B: Send + 'static> Default for App<B> {
 }
 
 impl<B: Send + 'static> App<B> {
+    /// Handles an incoming request and returns a response.
+    /// This method is typically called internally but is exposed for custom integrations.
     pub async fn handle(&self, req: Request<B>, res: Response) -> Response {
         let mut req = req;
         req.extensions_mut()
@@ -29,26 +32,31 @@ impl<B: Send + 'static> App<B> {
         self.router.handle(req, res).await
     }
 
+    /// Attaches a middleware to a specific path prefix.
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
         self.router.use_with(path, middleware);
         self
     }
 
+    /// Mounts another `Router` at the specified path prefix.
     pub fn use_router(&mut self, path: impl AsRef<str>, router: Router<B>) -> &mut Self {
         self.router.use_router(path, router);
         self
     }
 
+    /// Sets a generic handler when no route matches the requested path.
     pub fn not_found(&mut self, handler: impl Handler<B>) -> &mut Self {
         self.router.not_found(handler);
         self
     }
 
+    /// Registers a handler for all HTTP methods on the specified path.
     pub fn all(&mut self, path: impl AsRef<str>, handler: impl Handler<B> + Clone) -> &mut Self {
         self.router.all(path, handler);
         self
     }
 
+    /// Creates a route builder for the specified path, allowing chainable handler registrations.
     pub fn route(&mut self, path: impl AsRef<str>) -> Route<'_, B> {
         self.router.route_builder(path)
     }
@@ -68,6 +76,7 @@ impl<B: Send + 'static> App<B> {
 
 // listen only for Incoming
 impl App<Incoming> {
+    /// Binds the HTTP server to the given port and invokes the callback once ready.
     pub async fn listen<T, Fut>(self, port: u16, callback: T)
     where
         Self: Sized + Send + Sync + 'static,
@@ -96,6 +105,7 @@ impl App<Incoming> {
         }
     }
 
+    /// Binds the HTTPS server to the given port using a provided TLS configuration, and invokes the callback once ready.
     pub async fn listen_https<T, Fut>(self, port: u16, tls_config: ServerConfig, callback: T)
     where
         Self: Sized + Send + Sync + 'static,

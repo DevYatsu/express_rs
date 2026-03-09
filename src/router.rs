@@ -9,6 +9,7 @@ use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 
+/// Tools for interning symbols used heavily throughout routing.
 pub mod interner;
 mod layer;
 mod method;
@@ -18,12 +19,17 @@ pub use method::MethodKind;
 /// Total number of HTTP methods tracked.
 const METHOD_COUNT: usize = 9;
 
+/// A list of layer indices representing handlers resolving to a method.
 pub type LayerIndices = SmallVec<[usize; 8]>;
 
+/// Internal router for a specific HTTP method.
 #[derive(Debug, Default)]
 pub struct MethodRouter {
+    /// Underlying matchit router used to match path variables.
     pub matcher: matchit::Router<usize>,
+    /// Lists of layers matching the specific path indices.
     pub indices: Vec<LayerIndices>,
+    /// Map from string paths to their indices in the `matcher`.
     pub path_to_idx: FxHashMap<Arc<str>, usize>,
 }
 
@@ -33,16 +39,19 @@ pub struct MethodRouter {
 pub struct MethodRoutes([Option<MethodRouter>; METHOD_COUNT]);
 
 impl MethodRoutes {
+    /// Gets the router for a given standard method.
     #[inline]
     pub fn get(&self, method: MethodKind) -> Option<&MethodRouter> {
         self.0[method as usize].as_ref()
     }
 
+    /// Gets the mutable router for a given standard method.
     #[inline]
     pub fn get_mut(&mut self, method: MethodKind) -> Option<&mut MethodRouter> {
         self.0[method as usize].as_mut()
     }
 
+    /// Gets or creates the router for a given standard method.
     #[inline]
     pub fn entry_or_default(&mut self, method: MethodKind) -> &mut MethodRouter {
         self.0[method as usize].get_or_insert_with(MethodRouter::default)
@@ -57,6 +66,7 @@ impl MethodRoutes {
             .filter_map(|(i, slot)| slot.as_ref().map(|r| (MethodKind::from_index(i), r)))
     }
 
+    /// Check if the method is present.
     pub fn contains_method(&self, method: MethodKind) -> bool {
         self.0[method as usize].is_some()
     }
@@ -77,21 +87,29 @@ impl MethodRouter {
     }
 }
 
+/// Component used to match midlewares to path prefixes.
 #[derive(Debug)]
 pub struct MiddlewareMatcher {
+    /// Path prefix to match.
     pub path: Arc<str>,
+    /// The matching engine.
     pub router: matchit::Router<()>,
+    /// Indices of matching middleware layers.
     pub indices: LayerIndices,
 }
 
 /// The core routing engine for `express_rs`.
 pub struct Router<B = Incoming> {
+    /// The linear list of layers attached to the router.
     pub stack: Vec<Layer<B>>,
+    /// Pre-compiled matchers for middleware lookup.
     pub middleware_matchers: Vec<MiddlewareMatcher>,
     /// Side-index: path string → position in `middleware_matchers`.
     /// Kept in sync so `use_with` and `use_router` run in O(1) for path dedup.
     middleware_path_index: FxHashMap<Arc<str>, usize>,
+    /// Registered standard HTTP method route endpoints.
     pub routes: MethodRoutes,
+    /// Fallback handler executed if no match is found.
     pub not_found_handler: Option<Arc<dyn Handler<B>>>,
 }
 
@@ -108,6 +126,7 @@ impl<B> Default for Router<B> {
 }
 
 impl<B: Send + 'static> Router<B> {
+    /// Attaches a custom handler to a specific path and HTTP method.
     pub fn route(
         &mut self,
         path: impl AsRef<str>,
@@ -130,6 +149,7 @@ impl<B: Send + 'static> Router<B> {
         self.stack.last_mut().unwrap()
     }
 
+    /// Registers a handler for all HTTP methods on the specified path.
     pub fn all(&mut self, path: impl AsRef<str>, handler: impl Handler<B> + Clone) -> &mut Self {
         let path: Arc<str> = path.as_ref().into();
         for &method in &MethodKind::ALL {
@@ -138,6 +158,7 @@ impl<B: Send + 'static> Router<B> {
         self
     }
 
+    /// Creates a fluid route builder for a given path.
     pub fn route_builder(&mut self, path: impl AsRef<str>) -> Route<'_, B> {
         Route {
             router: self,
@@ -145,6 +166,7 @@ impl<B: Send + 'static> Router<B> {
         }
     }
 
+    /// Mounts a middleware function at the specified path prefix.
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
         let path: Arc<str> = path.as_ref().into();
         let layer_index = self.stack.len();
@@ -185,11 +207,13 @@ impl<B: Send + 'static> Router<B> {
         self
     }
 
+    /// Sets a catch-all handler for 404 Not Found scenarios.
     pub fn not_found(&mut self, handler: impl Handler<B>) -> &mut Self {
         self.not_found_handler = Some(Arc::new(handler));
         self
     }
 
+    /// Responds to an incoming HTTP request by dispatching to the configured handlers.
     pub async fn handle(&self, mut req: Request<B>, res: Response) -> Response {
         let raw_path = req.uri().path();
         let path = if raw_path.len() > 1 && raw_path.ends_with('/') {
@@ -310,6 +334,7 @@ impl<B: Send + 'static> Router<B> {
             })
     }
 
+    /// Mounts a child router into the current router at the given path prefix.
     pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router<B>) -> &mut Self {
         let prefix = prefix.as_ref().trim_end_matches('/');
 
@@ -365,9 +390,11 @@ impl<B: Send + 'static> Router<B> {
     }
 }
 
+/// Helper macro that generates convenient fluid HTTP method builder routines on the Router syntax.
 #[macro_export]
 macro_rules! define_methods {
     () => {
+        /// Registers a handler for GET requests.
         pub fn get(
             &mut self,
             path: impl AsRef<str>,
@@ -375,6 +402,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Get)
         }
+        /// Registers a handler for POST requests.
         pub fn post(
             &mut self,
             path: impl AsRef<str>,
@@ -382,6 +410,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Post)
         }
+        /// Registers a handler for PUT requests.
         pub fn put(
             &mut self,
             path: impl AsRef<str>,
@@ -389,6 +418,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Put)
         }
+        /// Registers a handler for DELETE requests.
         pub fn delete(
             &mut self,
             path: impl AsRef<str>,
@@ -396,6 +426,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Delete)
         }
+        /// Registers a handler for PATCH requests.
         pub fn patch(
             &mut self,
             path: impl AsRef<str>,
@@ -403,6 +434,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Patch)
         }
+        /// Registers a handler for HEAD requests.
         pub fn head(
             &mut self,
             path: impl AsRef<str>,
@@ -410,6 +442,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Head)
         }
+        /// Registers a handler for CONNECT requests.
         pub fn connect(
             &mut self,
             path: impl AsRef<str>,
@@ -417,6 +450,7 @@ macro_rules! define_methods {
         ) -> &mut Self {
             self.add_route(path, handler, $crate::router::MethodKind::Connect)
         }
+        /// Registers a handler for TRACE requests.
         pub fn trace(
             &mut self,
             path: impl AsRef<str>,
@@ -426,27 +460,35 @@ macro_rules! define_methods {
         }
     };
     (route) => {
+        /// Registers a handler for GET requests.
         pub fn get(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Get)
         }
+        /// Registers a handler for POST requests.
         pub fn post(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Post)
         }
+        /// Registers a handler for PUT requests.
         pub fn put(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Put)
         }
+        /// Registers a handler for DELETE requests.
         pub fn delete(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Delete)
         }
+        /// Registers a handler for PATCH requests.
         pub fn patch(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Patch)
         }
+        /// Registers a handler for HEAD requests.
         pub fn head(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Head)
         }
+        /// Registers a handler for CONNECT requests.
         pub fn connect(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Connect)
         }
+        /// Registers a handler for TRACE requests.
         pub fn trace(&mut self, handler: impl $crate::handler::Handler<B>) -> &mut Self {
             self.add_route(handler, $crate::router::MethodKind::Trace)
         }
@@ -484,6 +526,7 @@ pub struct Route<'a, B = Incoming> {
 }
 
 impl<'a, B: Send + 'static> Route<'a, B> {
+    /// Registers a handler for all HTTP methods on this route.
     pub fn all(&mut self, handler: impl Handler<B> + Clone) -> &mut Self {
         for &method in &MethodKind::ALL {
             self.router

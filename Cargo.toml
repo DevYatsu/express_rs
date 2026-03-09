@@ -2,6 +2,13 @@
 name = "express_rs"
 version = "0.1.0"
 edition = "2024"
+authors = ["DevYatsu"]
+description = "Fast, unopinionated, minimalist web framework for Rust, similar to Express.js"
+license = "MIT"
+repository = "https://github.com/DevYatsu/express_rs"
+readme = "README.md"
+keywords = ["web", "express", "framework", "http", "server"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
 hyper = { version = "1.8.1", features = ["full"] }
@@ -30,3 +37,10 @@ tokio-rustls = "0.26.4"
 env_logger = "0.11.9"
 httpdate = "1.0.3"
 rustc-hash = "2.1.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

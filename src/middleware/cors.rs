@@ -12,10 +12,15 @@ use rustc_hash::FxHashSet;
 /// construction time so no allocation happens on the hot path.
 #[derive(Debug, Clone)]
 pub struct CorsMiddleware {
+    /// Standard origins authorized by CORS.
     pub allowed_origins: FxHashSet<String>,
+    /// HTTP methods allowed by CORS.
     pub allowed_methods: FxHashSet<String>,
+    /// Headers allowed by CORS.
     pub allowed_headers: FxHashSet<String>,
+    /// Indicates whether the response can be shared when credentials flag is true.
     pub allow_credentials: bool,
+    /// How long the results of a preflight request can be cached.
     pub max_age: Option<u32>,
     // Pre-computed header values — built once in `new_inner`.
     methods_header: Option<HeaderValue>,
@@ -53,8 +58,7 @@ impl CorsMiddleware {
             .ok()
         };
 
-        let max_age_header = max_age
-            .and_then(|age| HeaderValue::from_str(&age.to_string()).ok());
+        let max_age_header = max_age.and_then(|age| HeaderValue::from_str(&age.to_string()).ok());
 
         Self {
             allowed_origins,

@@ -1,4 +1,6 @@
+/// Provides request parsing and extraction utilities.
 pub mod request;
+/// Provides response creation and formatting utilities.
 pub mod response;
 
 use async_trait::async_trait;
@@ -9,6 +11,7 @@ pub use response::{ExpressResponse, Response, ResponseError};
 /// Trait for async handler abstraction.
 #[async_trait]
 pub trait Handler<B = Incoming>: Send + Sync + 'static {
+    /// Invokes the handler asynchronously.
     async fn call(&self, req: Request<B>, res: Response) -> Response;
 }
 

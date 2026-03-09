@@ -1,20 +1,31 @@
 use hyper::Method;
 
+/// Represents an HTTP method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MethodKind {
+    /// The GET method.
     Get = 0,
+    /// The POST method.
     Post = 1,
+    /// The PUT method.
     Put = 2,
+    /// The DELETE method.
     Delete = 3,
+    /// The PATCH method.
     Patch = 4,
+    /// The HEAD method.
     Head = 5,
+    /// The OPTIONS method.
     Options = 6,
+    /// The TRACE method.
     Trace = 7,
+    /// The CONNECT method.
     Connect = 8,
 }
 
 impl MethodKind {
+    /// An array containing all supported standard HTTP methods.
     pub const ALL: [MethodKind; 9] = [
         MethodKind::Get,
         MethodKind::Post,
@@ -27,6 +38,7 @@ impl MethodKind {
         MethodKind::Connect,
     ];
 
+    /// Converts hyper's method to our internal HTTP method variant.
     pub fn from_hyper(method: &hyper::Method) -> Self {
         match *method {
             Method::GET => MethodKind::Get,

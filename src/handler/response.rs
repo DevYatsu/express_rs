@@ -6,9 +6,7 @@ use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
 use hyper::body::Frame;
-use hyper::header::{
-    CONTENT_TYPE, HeaderValue, IntoHeaderName, LOCATION, SET_COOKIE,
-};
+use hyper::header::{CONTENT_TYPE, HeaderValue, IntoHeaderName, LOCATION, SET_COOKIE};
 use once_cell::sync::Lazy;
 use quick_cache::sync::Cache;
 use serde::Serialize;
@@ -21,33 +19,49 @@ use thiserror::Error;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
+/// Represents an error that occurs during response building or handling.
 #[derive(Error, Debug)]
 pub enum ResponseError {
+    /// Invalid HTTP status code.
     #[error("invalid status code: {0}")]
     InvalidStatusCode(u16),
+    /// Error serializing JSON body.
     #[error("JSON serialization error: {0}")]
     JsonSerializationError(#[from] serde_json::Error),
+    /// Error due to an invalid HTTP header value.
     #[error("invalid header value: {0}")]
     InvalidHeaderValue(#[from] hyper::header::InvalidHeaderValue),
+    /// Error opening a file for a response.
     #[error("file open error: {0}")]
     FileOpenError(#[from] io::Error),
+    /// Error reading memory mapped file.
     #[error("memory mapping error")]
     MmapError,
+    /// Error reading request body.
     #[error("body read error: {0}")]
     BodyReadError(String),
 }
 
+/// The response structure used to construct HTTP responses.
 #[derive(Debug)]
 pub struct Response {
+    /// The HTTP status code.
     pub status: StatusCode,
+    /// HTTP headers for the response.
     pub headers: hyper::HeaderMap,
+    /// The body of the response.
     pub body: ResponseBody,
+    /// Any error that occurred while processing the response.
     pub error: Option<ResponseError>,
 }
 
+/// The body of an HTTP response.
 pub enum ResponseBody {
+    /// An empty body.
     Empty,
+    /// A body buffered in memory.
     Buffered(Vec<Bytes>),
+    /// A streaming body.
     Stream(
         Pin<Box<dyn futures_util::Stream<Item = Result<Frame<Bytes>, io::Error>> + Send + Sync>>,
     ),
@@ -63,6 +77,7 @@ impl std::fmt::Debug for ResponseBody {
     }
 }
 impl ResponseBody {
+    /// Returns `true` if the body is completely empty.
     pub fn is_empty(&self) -> bool {
         matches!(self, ResponseBody::Empty)
     }
@@ -80,27 +95,42 @@ impl Default for Response {
     }
 }
 
+/// Shorthand type for the hyper service response type.
 pub type ServerResponse = hyper::Response<BoxBody<Bytes, std::convert::Infallible>>;
 
+/// Trait providing Express-like response builder methods.
 pub trait ExpressResponse: Sized {
+    /// Sets the HTTP status code.
     fn status(self, status: StatusCode) -> Self;
+    /// Sets the HTTP status code from a `u16`.
     fn status_code(self, code: u16) -> Self;
+    /// Sets an HTTP header.
     fn header<K, V>(self, key: K, value: V) -> Self
     where
         K: IntoHeaderName,
         V: Into<HeaderValue>;
+    /// Sets the `Content-Type` header.
     fn content_type<T: AsRef<str>>(self, mime_type: T) -> Self;
+    /// Sets the `Location` header.
     fn location<T: AsRef<str>>(self, url: T) -> Self;
+    /// Sets the response body entirely.
     fn body<T: Into<Bytes>>(self, data: T) -> Self;
+    /// Appends data to the response body.
     fn write<T: Into<Bytes>>(self, data: T) -> Self;
+    /// Sends a plain text response.
     fn send_text<T: Into<Cow<'static, str>>>(self, text: T) -> Self;
+    /// Sends an HTML response.
     fn send_html<T: Into<Cow<'static, str>>>(self, html: T) -> Self;
+    /// Sends a JSON response.
     fn send_json<T: Serialize>(self, data: &T) -> Self;
+    /// Sends a redirect response.
     fn redirect<T: AsRef<str>>(self, url: T) -> Self;
+    /// Sets a cookie.
     fn cookie(self, cookie: Cookie<'_>) -> Self;
 }
 
 impl Response {
+    /// Creates a new, empty HTTP 200 OK response.
     pub fn new() -> Self {
         Self {
             status: StatusCode::OK,
@@ -110,42 +140,51 @@ impl Response {
         }
     }
 
+    /// Creates a new HTTP 200 OK response. Alias for `new()`.
     pub fn ok() -> Self {
         Self::new()
     }
 
+    /// Creates a new HTTP 200 OK response with a JSON body.
     pub fn ok_json<T: Serialize>(data: &T) -> Self {
         Self::new().send_json(data)
     }
 
+    /// Creates a new HTTP 200 OK response with a text body.
     pub fn ok_text<T: Into<Cow<'static, str>>>(text: T) -> Self {
         Self::new().send_text(text)
     }
 
+    /// Creates a new HTTP 200 OK response with an HTML body.
     pub fn ok_html<T: Into<Cow<'static, str>>>(html: T) -> Self {
         Self::new().send_html(html)
     }
 
+    /// Creates a redirect response to the specified URL.
     pub fn redirect<T: AsRef<str>>(url: T) -> Self {
         Self::new().redirect(url)
     }
 
+    /// Creates an HTTP 404 Not Found response.
     pub fn not_found() -> Self {
         Self::new()
             .status(StatusCode::NOT_FOUND)
             .send_text("Not Found")
     }
 
+    /// Creates an HTTP 500 Internal Server Error response.
     pub fn internal_server_error() -> Self {
         Self::new()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .send_text("Internal Server Error")
     }
 
+    /// Gets the current HTTP status of the response.
     pub fn get_status(&self) -> StatusCode {
         self.status
     }
 
+    /// Converts this `Response` builder into a standard hyper response.
     pub fn into_hyper(mut self) -> ServerResponse {
         let body: BoxBody<Bytes, std::convert::Infallible> = match self.body {
             ResponseBody::Empty => Full::new(Bytes::new()).map_err(|n| match n {}).boxed(),
@@ -272,6 +311,7 @@ impl Response {
         }
     }
 
+    /// Sends a file as the response.
     pub async fn send_file<T: AsRef<str>>(self, path: T) -> Self {
         self.file(path).await
     }
@@ -398,8 +438,7 @@ fn sanitize_header_value(val: &str) -> HeaderValue {
 /// `tokio::sync::Mutex<LruCache>` global bottleneck.
 /// `quick_cache::sync::Cache` is lock-free on reads and uses fine-grained
 /// sharding on writes.
-static FILE_CACHE: Lazy<Cache<String, (Arc<str>, Arc<Bytes>)>> =
-    Lazy::new(|| Cache::new(100));
+static FILE_CACHE: Lazy<Cache<String, (Arc<str>, Arc<Bytes>)>> = Lazy::new(|| Cache::new(100));
 
 #[cfg(test)]
 mod tests {
@@ -458,10 +497,7 @@ mod tests {
             true,
         );
         assert_eq!(res.status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            res.headers.get(CONTENT_TYPE).unwrap(),
-            "application/json"
-        );
+        assert_eq!(res.headers.get(CONTENT_TYPE).unwrap(), "application/json");
         assert!(!res.body.is_empty());
     }
 

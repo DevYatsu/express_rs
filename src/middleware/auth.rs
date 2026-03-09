@@ -1,11 +1,20 @@
+/// Authentication middleware builder pattern
 pub mod builder;
+/// Authentication configuration structure
 pub mod config;
+/// HTTP cookie mechanisms tailored for auth
 pub mod cookies;
+/// Authorization and validation error cases
 pub mod error;
+/// JWT backend driver module
 pub mod jwt;
+/// Standard web session backends
 pub mod session;
+/// Unit tests for auth component
 pub mod tests;
+/// Base schema structures defining user permissions
 pub mod user;
+/// Common interface over validation logic
 pub mod validator;
 
 use crate::handler::{ExpressResponse, Request, Response};
@@ -182,6 +191,7 @@ impl Middleware for AuthMiddleware {
 }
 
 impl AuthMiddleware {
+    /// A quick helper factory initializing a JWT auth middleware setup.
     pub fn jwt_auth(
         jwt_validator: JwtTokenValidator,
         protected_routes: matchit::Router<AuthLevel>,
@@ -191,6 +201,7 @@ impl AuthMiddleware {
             .build_with_jwt(jwt_validator)
     }
 
+    /// A quick helper factory initializing a Web Session auth middleware setup.
     pub fn session_auth(
         sessions: SessionTokenValidator,
         protected_routes: matchit::Router<AuthLevel>,
