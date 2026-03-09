@@ -41,4 +41,21 @@ impl MethodKind {
             _ => unreachable!(),
         }
     }
+
+    /// Convert array index back to MethodKind (used by MethodRoutes::iter).
+    #[inline]
+    pub(crate) fn from_index(i: usize) -> Self {
+        match i {
+            0 => MethodKind::Get,
+            1 => MethodKind::Post,
+            2 => MethodKind::Put,
+            3 => MethodKind::Delete,
+            4 => MethodKind::Patch,
+            5 => MethodKind::Head,
+            6 => MethodKind::Options,
+            7 => MethodKind::Trace,
+            8 => MethodKind::Connect,
+            _ => unreachable!("invalid MethodKind index: {}", i),
+        }
+    }
 }

@@ -8,12 +8,13 @@ pub mod prelude;
 
 /// Helper macro to initialize a high-performance global state.
 ///
-/// This uses `once_cell::sync::Lazy` internally for thread-safe, 
+/// This uses `once_cell::sync::Lazy` internally for thread-safe,
 /// one-time initialization with minimal overhead.
 #[macro_export]
 macro_rules! express_state {
     ($name:ident, $type:ty) => {
-        static $name: $crate::reexports::Lazy<$type> = $crate::reexports::Lazy::new(<$type>::default);
+        static $name: $crate::reexports::Lazy<$type> =
+            $crate::reexports::Lazy::new(<$type>::default);
     };
 }
 

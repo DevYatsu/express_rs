@@ -2,8 +2,10 @@ use crate::handler::{ExpressResponse, Request, Response};
 use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
 use crate::prelude::RequestExt;
 use async_trait::async_trait;
-use hyper::header::{CACHE_CONTROL, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, HeaderValue};
-use std::path::{Component, Path};
+use hyper::header::{
+    CACHE_CONTROL, ETAG, HeaderValue, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
+};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -53,33 +55,37 @@ impl<B: Send + Sync + 'static> Middleware<B> for StaticServeMiddleware {
     async fn call(&self, req: &mut Request<B>, res: &mut Response) -> MiddlewareResult {
         // Extract the relative path if the middleware was mounted with a wildcard
         // e.g., app.use_with("/src/{*p}", ...) -> parameter is "p"
-        let raw_path = req.params().get("p")
+        let raw_path = req
+            .params()
+            .get("p")
             .or_else(|| req.params().get("path"))
             .or_else(|| req.params().get("file"))
             .unwrap_or_else(|| req.uri().path());
 
-        // Prevent path traversal vulnerabilities by parsing path components safely
-        let mut clean_path = String::new();
-        for component in Path::new(raw_path).components() {
-            if let Component::Normal(c) = component {
-                clean_path.push('/');
-                clean_path.push_str(&c.to_string_lossy());
-            }
-        }
+        // Prevent path traversal: collect only Normal components into a PathBuf.
+        let clean: PathBuf = Path::new(raw_path)
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n),
+                _ => None,
+            })
+            .collect();
 
-        // If path is empty (just "/"), default to "/index.html" (or let send_file fail, we will fallback)
-        if clean_path.is_empty() {
-            clean_path.push_str("/index.html");
-        }
-
-        let file_path = format!("{}{}", self.root, clean_path);
-        let path = Path::new(&file_path);
+        // If path is empty (just "/"), default to "index.html".
+        let joined = if clean.as_os_str().is_empty() {
+            Path::new(&self.root).join("index.html")
+        } else {
+            Path::new(&self.root).join(&clean)
+        };
+        let file_path = joined.to_string_lossy().into_owned();
+        let path = joined.as_path();
 
         if !path.exists() {
             return next_res();
         }
 
-        let metadata = match std::fs::metadata(path) {
+        // Use async metadata to avoid blocking the Tokio executor.
+        let metadata = match tokio::fs::metadata(path).await {
             Ok(m) => m,
             Err(_) => return next_res(),
         };
@@ -90,7 +96,10 @@ impl<B: Send + Sync + 'static> Middleware<B> for StaticServeMiddleware {
 
         // Generate a weak ETag based on modified time and file size
         let last_modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let timestamp = last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let timestamp = last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let etag_val = format!("W/\"{:x}-{:x}\"", metadata.len(), timestamp);
 
         // Check conditional match (ETag)
@@ -103,7 +112,9 @@ impl<B: Send + Sync + 'static> Middleware<B> for StaticServeMiddleware {
 
         // Check conditional match (Last-Modified)
         if let Some(if_modified_since) = req.headers().get(IF_MODIFIED_SINCE) {
-            if let Ok(since) = httpdate::parse_http_date(if_modified_since.to_str().unwrap_or_default()) {
+            if let Ok(since) =
+                httpdate::parse_http_date(if_modified_since.to_str().unwrap_or_default())
+            {
                 if last_modified <= since {
                     *res = Response::new().status(hyper::StatusCode::NOT_MODIFIED);
                     return stop_res();

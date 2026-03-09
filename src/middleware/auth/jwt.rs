@@ -7,8 +7,14 @@ use super::{
 };
 
 /// JWT-based token validator
+///
+/// # TODO
+/// The `validate_token` implementation is currently a placeholder.
+/// Integrate the `jsonwebtoken` crate to perform real signature verification,
+/// expiry checks, and claims extraction.
 #[derive(Debug, Clone)]
 pub struct JwtTokenValidator {
+    #[allow(dead_code)] // Used once real JWT validation is wired up.
     secret: String,
     issuer: Option<String>,
     audience: Option<String>,

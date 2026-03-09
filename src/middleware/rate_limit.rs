@@ -54,13 +54,20 @@ impl Default for RateLimitMiddleware {
 }
 
 #[async_trait]
-impl Middleware for RateLimitMiddleware {
-    async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
-        let client_ip = req
-            .get_header("X-Forwarded-For")
-            .or_else(|| req.get_header("X-Real-IP"))
-            .unwrap_or("unknown")
-            .to_string();
+impl<B: Send + Sync + 'static> Middleware<B> for RateLimitMiddleware {
+    async fn call(&self, req: &mut Request<B>, res: &mut Response) -> MiddlewareResult {
+        // Use the real socket address as the primary key — it cannot be spoofed
+        // unlike X-Forwarded-For headers. Fall back to proxy headers only when
+        // the socket address is unavailable (shouldn't happen in practice).
+        let client_ip: String = req
+            .ip()
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_else(|| {
+                req.get_header("X-Forwarded-For")
+                    .or_else(|| req.get_header("X-Real-IP"))
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
 
         if self.is_rate_limited(&client_ip) {
             let retry_after = self.window_size.as_secs().to_string();
@@ -114,5 +121,45 @@ impl RateLimitMiddleware {
             entry.count += 1;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::Response;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_rate_limit_basic() {
+        let mw = RateLimitMiddleware::new(2, Duration::from_secs(60));
+        let mut res = Response::new();
+
+        let mut req1 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req1, &mut res).await.is_next());
+
+        let mut req2 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req2, &mut res).await.is_next());
+
+        let mut req3 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req3, &mut res).await.is_stop());
+        assert_eq!(res.get_status(), hyper::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_window_reset() {
+        let mw = RateLimitMiddleware::new(1, Duration::from_millis(100));
+        let mut res = Response::new();
+
+        let mut req1 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req1, &mut res).await.is_next());
+
+        let mut req2 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req2, &mut res).await.is_stop());
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let mut req3 = Request::builder().uri("/").body(()).unwrap();
+        assert!(mw.call(&mut req3, &mut res).await.is_next());
     }
 }

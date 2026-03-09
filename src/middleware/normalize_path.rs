@@ -1,5 +1,5 @@
 use crate::handler::{Request, Response};
-use crate::middleware::{next_res, Middleware, MiddlewareResult};
+use crate::middleware::{Middleware, MiddlewareResult, next_res};
 use async_trait::async_trait;
 use hyper::Uri;
 
@@ -96,5 +96,55 @@ impl<B: Send + Sync + 'static> Middleware<B> for NormalizePathMiddleware {
         }
 
         next_res()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::Response;
+
+    #[tokio::test]
+    async fn test_normalize_path_slashes() {
+        let mw = NormalizePathMiddleware::new();
+        let mut req = Request::builder().uri("//test//path/").body(()).unwrap();
+        let mut res = Response::new();
+
+        mw.call(&mut req, &mut res).await;
+
+        assert_eq!(req.uri().path(), "/test/path");
+    }
+
+    #[tokio::test]
+    async fn test_normalize_path_with_query() {
+        let mw = NormalizePathMiddleware::new();
+        let mut req = Request::builder().uri("/test//?q=1").body(()).unwrap();
+        let mut res = Response::new();
+
+        mw.call(&mut req, &mut res).await;
+
+        assert_eq!(req.uri().path(), "/test");
+        assert_eq!(req.uri().query(), Some("q=1"));
+    }
+
+    #[tokio::test]
+    async fn test_normalize_path_no_trailing_slash_if_disabled() {
+        let mw = NormalizePathMiddleware::new().strip_trailing_slash(false);
+        let mut req = Request::builder().uri("/test/").body(()).unwrap();
+        let mut res = Response::new();
+
+        mw.call(&mut req, &mut res).await;
+
+        assert_eq!(req.uri().path(), "/test/");
+    }
+
+    #[tokio::test]
+    async fn test_normalize_path_no_merge_if_disabled() {
+        let mw = NormalizePathMiddleware::new().merge_slashes(false);
+        let mut req = Request::builder().uri("//test").body(()).unwrap();
+        let mut res = Response::new();
+
+        mw.call(&mut req, &mut res).await;
+
+        assert_eq!(req.uri().path(), "//test");
     }
 }

@@ -3,13 +3,14 @@ use hyper::header::{self, HeaderValue};
 use local_ip_address::local_ip;
 use log::info;
 use serde_json::json;
-use std::sync::{atomic::{AtomicU32, Ordering}};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
-            writeln!(buf,
+            writeln!(
+                buf,
                 "{} [{}] {}",
                 chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"),
                 record.level(),
@@ -38,7 +39,10 @@ async fn main() {
 
     // Middleware
     app.use_with("/{*p}", NormalizePathMiddleware::new())
-        .use_with("/src/{*p}", StaticServeMiddleware::new("../express_rs/").max_age(86400))
+        .use_with(
+            "/src/{*p}",
+            StaticServeMiddleware::new("../express_rs/").max_age(86400),
+        )
         .use_with("/css/{*p}", StaticServeMiddleware::new("."))
         .use_with("/expressjs_tests/{*p}", StaticServeMiddleware::new("."))
         .use_with("/{*p}", CorsMiddleware::permissive());
@@ -49,7 +53,7 @@ async fn main() {
     // Routes
 
     // GET / - index page
-    app.get("/",async |_req: Request, res: Response| {        
+    app.get("/", async |_req: Request, res: Response| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -95,7 +99,7 @@ async fn main() {
         )
         .send_json(&json!({
             "message": "Hello from JSON!",
-            "status": "success",        
+            "status": "success",
             "version": "1.0"
         }))
     });
@@ -106,7 +110,7 @@ async fn main() {
     });
 
     // GET /status - always 400
-    app.get("/status", async |_req:  Request, res: Response| {
+    app.get("/status", async |_req: Request, res: Response| {
         res.status_code(400).send_text("400 Bad Request")
     });
 
@@ -117,12 +121,9 @@ async fn main() {
     });
 
     // GET /file - stream Cargo.lock (async, borrows res across await)
-    app.get(
-        "/file",
-        async|_req: Request, res: Response| {
-            res.send_file("./Cargo.lock").await
-        },
-    );
+    app.get("/file", async |_req: Request, res: Response| {
+        res.send_file("./Cargo.lock").await
+    });
 
     // /hello - X-Powered-By middleware then response
     // app.use_with("/hello", async |_req: &mut Request, res: &mut Response| {
@@ -141,12 +142,8 @@ async fn main() {
 
     // Route builder pattern - multiple methods on the same path
     app.route("/api/v1/user")
-        .get(async |_req: Request, res: Response| {
-            res.send_text("Get User")
-        })
-        .post(async |_req: Request, res: Response| {
-            res.send_text("Post User")
-        });
+        .get(async |_req: Request, res: Response| res.send_text("Get User"))
+        .post(async |_req: Request, res: Response| res.send_text("Post User"));
 
     // all() - matches every HTTP method
     app.all("/ping", async |_req: Request, res: Response| {
@@ -155,7 +152,8 @@ async fn main() {
 
     // Custom 404 handler
     app.not_found(async |_req: Request, res: Response| {
-        res.status_code(404).send_text("Custom 404: Page not found!")
+        res.status_code(404)
+            .send_text("Custom 404: Page not found!")
     });
 
     // ── Listen ──────────────────────────────────────────────────────────────

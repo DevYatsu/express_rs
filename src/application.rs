@@ -1,4 +1,4 @@
-use crate::handler::{Request, Response, Handler};
+use crate::handler::{Handler, Request, Response};
 use crate::middleware::Middleware;
 use crate::router::{MethodKind, Route, Router};
 use crate::server::Server;

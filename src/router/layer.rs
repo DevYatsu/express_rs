@@ -7,7 +7,7 @@ use std::{fmt::Debug, sync::Arc};
 /// Represents a single routing or middleware layer in the application.
 pub struct Layer<B = Incoming> {
     pub path: Arc<str>,
-    pub method: Option<MethodKind>, 
+    pub method: Option<MethodKind>,
     pub middlewares: Vec<Arc<dyn Middleware<B>>>,
     pub handler: Option<Arc<dyn Handler<B>>>,
 }

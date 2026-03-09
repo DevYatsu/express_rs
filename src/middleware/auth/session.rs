@@ -4,13 +4,14 @@ use super::{
     validator::TokenValidator,
 };
 use async_trait::async_trait;
-use std::{collections::HashMap, sync::Arc};
+use dashmap::DashMap;
+use std::sync::Arc;
 
 /// Session-based token validator with async support
 #[derive(Debug, Clone)]
 pub struct SessionTokenValidator {
     // In production, this would be a database connection or Redis client
-    sessions: Arc<tokio::sync::RwLock<HashMap<String, SessionData>>>,
+    sessions: Arc<DashMap<String, SessionData>>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,7 +24,7 @@ struct SessionData {
 impl SessionTokenValidator {
     pub fn new() -> Self {
         Self {
-            sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            sessions: Arc::new(DashMap::new()),
         }
     }
 
@@ -40,24 +41,20 @@ impl SessionTokenValidator {
             last_accessed: now,
         };
 
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(token, session_data);
+        self.sessions.insert(token, session_data);
     }
 
     pub async fn remove_session(&self, token: &str) {
-        let mut sessions = self.sessions.write().await;
-        sessions.remove(token);
+        self.sessions.remove(token);
     }
 
     pub async fn cleanup_expired_sessions(&self) {
         let now = std::time::Instant::now();
-        let mut sessions = self.sessions.write().await;
-        sessions.retain(|_, session| session.expires_at > now);
+        self.sessions.retain(|_, session| session.expires_at > now);
     }
 
     pub async fn update_last_accessed(&self, token: &str) -> AuthResult<()> {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.get_mut(token) {
+        if let Some(mut session) = self.sessions.get_mut(token) {
             session.last_accessed = std::time::Instant::now();
             Ok(())
         } else {
@@ -80,15 +77,22 @@ impl TokenValidator for SessionTokenValidator {
         }
 
         let now = std::time::Instant::now();
-        let sessions = self.sessions.read().await;
 
-        if let Some(session_data) = sessions.get(token) {
-            if session_data.expires_at <= now {
-                return Err(AuthError::TokenExpired);
-            }
-            Ok(session_data.user.clone())
-        } else {
-            Err(AuthError::UserNotFound)
+        // Clone the user *before* dropping the read-lock guard so we hold
+        // the lock for the minimum time (no clone latency inside the lock).
+        let user_opt = {
+            self.sessions.get(token).map(|s| {
+                if s.expires_at <= now {
+                    Err(AuthError::TokenExpired)
+                } else {
+                    Ok(s.user.clone())
+                }
+            })
+        }; // read-lock dropped here
+
+        match user_opt {
+            Some(result) => result,
+            None => Err(AuthError::UserNotFound),
         }
     }
 

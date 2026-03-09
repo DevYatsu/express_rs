@@ -2,31 +2,102 @@ use crate::handler::{ExpressResponse, Request, Response};
 use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
 use async_trait::async_trait;
 use hyper::header::HeaderValue;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Middleware that adds [CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS) headers to responses,
 /// and handles preflight `OPTIONS` requests.
+///
+/// ## Performance
+/// The `Allow-Methods` and `Allow-Headers` header values are pre-computed at
+/// construction time so no allocation happens on the hot path.
 #[derive(Debug, Clone)]
 pub struct CorsMiddleware {
-    pub allowed_origins: HashSet<String>,
-    pub allowed_methods: HashSet<String>,
-    pub allowed_headers: HashSet<String>,
+    pub allowed_origins: FxHashSet<String>,
+    pub allowed_methods: FxHashSet<String>,
+    pub allowed_headers: FxHashSet<String>,
     pub allow_credentials: bool,
     pub max_age: Option<u32>,
+    // Pre-computed header values — built once in `new_inner`.
+    methods_header: Option<HeaderValue>,
+    headers_header: Option<HeaderValue>,
+    max_age_header: Option<HeaderValue>,
+}
+
+impl CorsMiddleware {
+    fn new_inner(
+        allowed_origins: FxHashSet<String>,
+        allowed_methods: FxHashSet<String>,
+        allowed_headers: FxHashSet<String>,
+        allow_credentials: bool,
+        max_age: Option<u32>,
+    ) -> Self {
+        let methods_header = HeaderValue::from_str(
+            &allowed_methods
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+        .ok();
+
+        let headers_header = if allowed_headers.is_empty() {
+            None
+        } else {
+            HeaderValue::from_str(
+                &allowed_headers
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+            .ok()
+        };
+
+        let max_age_header = max_age
+            .and_then(|age| HeaderValue::from_str(&age.to_string()).ok());
+
+        Self {
+            allowed_origins,
+            allowed_methods,
+            allowed_headers,
+            allow_credentials,
+            max_age,
+            methods_header,
+            headers_header,
+            max_age_header,
+        }
+    }
+
+    /// Construct a permissive CORS config that allows all origins.
+    pub fn permissive() -> Self {
+        Self::new_inner(
+            ["*".to_string()].into_iter().collect(),
+            ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            ["Content-Type", "Authorization", "X-Requested-With"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            true,
+            Some(86400),
+        )
+    }
 }
 
 impl Default for CorsMiddleware {
     fn default() -> Self {
-        Self {
-            allowed_origins: HashSet::new(),
-            allowed_methods: vec!["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"]
+        Self::new_inner(
+            FxHashSet::default(),
+            ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
-            allowed_headers: HashSet::new(),
-            allow_credentials: false,
-            max_age: None,
-        }
+            FxHashSet::default(),
+            false,
+            None,
+        )
     }
 }
 
@@ -56,32 +127,15 @@ impl Middleware for CorsMiddleware {
         }
 
         if req.method() == "OPTIONS" {
-            if let Ok(val) = HeaderValue::from_str(
-                &self
-                    .allowed_methods
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ) {
-                res.header("Access-Control-Allow-Methods", val);
+            // Use the pre-computed header values — zero allocation on this path.
+            if let Some(val) = &self.methods_header {
+                res.header("Access-Control-Allow-Methods", val.clone());
             }
-
-            if let Ok(val) = HeaderValue::from_str(
-                &self
-                    .allowed_headers
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ) {
-                res.header("Access-Control-Allow-Headers", val);
+            if let Some(val) = &self.headers_header {
+                res.header("Access-Control-Allow-Headers", val.clone());
             }
-
-            if let Some(age) = self.max_age
-                && let Ok(val) = HeaderValue::from_str(&age.to_string())
-            {
-                res.header("Access-Control-Max-Age", val);
+            if let Some(val) = &self.max_age_header {
+                res.header("Access-Control-Max-Age", val.clone());
             }
 
             res.status_code(204);
@@ -89,23 +143,5 @@ impl Middleware for CorsMiddleware {
         }
 
         next_res()
-    }
-}
-
-impl CorsMiddleware {
-    pub fn permissive() -> Self {
-        Self {
-            allowed_origins: vec!["*".to_string()].into_iter().collect(),
-            allowed_methods: vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            allowed_headers: vec!["Content-Type", "Authorization", "X-Requested-With"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            allow_credentials: true,
-            max_age: Some(86400),
-        }
     }
 }

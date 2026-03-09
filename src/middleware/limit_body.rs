@@ -6,6 +6,7 @@ use serde_json::json;
 
 /// Middleware that rejects requests with a `Content-Length` exceeding the allowed limit.
 /// Can respond in either JSON or plain text depending on the `Accept` header.
+#[allow(dead_code)] // Public API: constructed by library users.
 #[derive(Debug, Clone)]
 pub struct BodySizeLimitMiddleware {
     /// Max body size in bytes.

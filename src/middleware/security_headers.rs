@@ -19,12 +19,12 @@ use hyper::header::HeaderValue;
 pub struct SecurityHeadersMiddleware;
 
 #[async_trait]
-impl Middleware for SecurityHeadersMiddleware {
+impl<B: Send + Sync + 'static> Middleware<B> for SecurityHeadersMiddleware {
     /// Injects security headers into the response.
     ///
     /// This middleware does **not** inspect the request or block it based on policy.
     /// It simply adds defensive headers for the response.
-    async fn call(&self, _req: &mut Request, res: &mut Response) -> MiddlewareResult {
+    async fn call(&self, _req: &mut Request<B>, res: &mut Response) -> MiddlewareResult {
         // Content Security Policy
         res.header(
             "Content-Security-Policy",
@@ -59,5 +59,37 @@ impl Middleware for SecurityHeadersMiddleware {
         );
 
         next_res()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::Response;
+
+    #[tokio::test]
+    async fn test_security_headers() {
+        let mw = SecurityHeadersMiddleware;
+        let mut req = Request::builder().uri("/").body(()).unwrap();
+        let mut res = Response::new();
+
+        mw.call(&mut req, &mut res).await;
+
+        let headers = &res.headers;
+        assert_eq!(
+            headers.get("Content-Security-Policy").unwrap(),
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+        );
+        assert_eq!(headers.get("X-XSS-Protection").unwrap(), "1; mode=block");
+        assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
+        assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
+        assert_eq!(
+            headers.get("Referrer-Policy").unwrap(),
+            "strict-origin-when-cross-origin"
+        );
+        assert_eq!(
+            headers.get("Strict-Transport-Security").unwrap(),
+            "max-age=31536000; includeSubDomains"
+        );
     }
 }

@@ -1,65 +1,48 @@
-use super::{config::CookieAuthConfig, error::AuthResult};
+use super::{config::CookieAuthConfig, error::{AuthError, AuthResult}};
 use crate::handler::Request;
 use cookie::{Cookie, CookieJar};
+use hyper::header::COOKIE;
 
 /// Cookie handling utility using the cookie crate
 #[derive(Debug, Clone)]
 pub struct CookieHandler;
 
 impl CookieHandler {
-    /// Extracts a specific cookie value from the request using cookie crate    
-    pub fn get_cookie_value(_req: &Request, cookie_name: &str) -> AuthResult<Option<String>> {
-        let jar = CookieJar::new();
-
-        // if let Some(cookie_header) = req.headers().get(COOKIE) {
-        //     // Fully extract the string to avoid returning a reference to `req`
-        //     let cookie_str = cookie_header
-        //         .to_str()
-        //         .map_err(|_| AuthError::MalformedCookie)?
-        //         .to_owned(); // clone the string
-
-        //     let parts: Vec<String> = cookie_str
-        //         .split(';')
-        //         .map(|s| s.trim().to_string())
-        //         .collect();
-        //     for cookie in parts {
-        //         if !cookie.is_empty() {
-        //             if let Ok(parsed) = Cookie::parse(&cookie) {
-        //                 jar.add_original(parsed);
-        //             }
-        //         }
-        //     }
-        // }
-
-        Ok(jar
-            .get(cookie_name)
-            .map(|cookie| cookie.value().to_string()))
+    /// Extracts a specific cookie value from the request.
+    pub fn get_cookie_value(req: &Request, cookie_name: &str) -> AuthResult<Option<String>> {
+        let jar = Self::build_jar(req)?;
+        Ok(jar.get(cookie_name).map(|c| c.value().to_string()))
     }
 
-    /// Gets all cookies from the request
-    pub fn get_all_cookies(_req: &Request) -> AuthResult<CookieJar> {
-        let jar = CookieJar::new();
+    /// Gets all cookies from the request as a `CookieJar`.
+    pub fn get_all_cookies(req: &Request) -> AuthResult<CookieJar> {
+        Self::build_jar(req)
+    }
 
-        // for cookie_header in req.headers().get_all(COOKIE) {
-        //     let cookie_str = cookie_header
-        //         .to_str()
-        //         .map_err(|_| AuthError::MalformedCookie)?;
+    /// Parses the `Cookie` header into a `CookieJar`.
+    fn build_jar(req: &Request) -> AuthResult<CookieJar> {
+        let mut jar = CookieJar::new();
 
-        //     for cookie_str in cookie_str.split(';') {
-        //         let cookie_str = cookie_str.trim();
-        //         if !cookie_str.is_empty() {
-        //             match Cookie::parse(cookie_str) {
-        //                 Ok(cookie) => jar.add_original(cookie),
-        //                 Err(_) => continue,
-        //             }
-        //         }
-        //     }
-        // }
+        for cookie_header in req.headers().get_all(COOKIE) {
+            let cookie_str = cookie_header
+                .to_str()
+                .map_err(|_| AuthError::MalformedCookie)?;
+
+            for part in cookie_str.split(';') {
+                let part = part.trim();
+                if !part.is_empty() {
+                    // Cookie::parse requires an owned String to avoid lifetime issues.
+                    if let Ok(parsed) = Cookie::parse(part.to_owned()) {
+                        jar.add_original(parsed);
+                    }
+                }
+            }
+        }
 
         Ok(jar)
     }
 
-    /// Creates a new session cookie
+    /// Creates a new session cookie with the given config.
     pub fn create_session_cookie(
         name: &str,
         value: &str,
@@ -86,7 +69,7 @@ impl CookieHandler {
         cookie.build()
     }
 
-    /// Creates a cookie to clear/logout
+    /// Creates a cookie that clears the session (logout).
     pub fn create_logout_cookie(name: &str, config: &CookieAuthConfig) -> Cookie<'static> {
         Cookie::build((name.to_owned(), ""))
             .path(config.cookie_path.clone())

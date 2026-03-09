@@ -1,8 +1,11 @@
 use self::interner::INTERNER;
-use crate::{handler::{ExpressResponse, Handler, Request, Response, request::RequestMetadataInternal}, prelude::Middleware};
-use ahash::HashMap;
+use crate::{
+    handler::{ExpressResponse, Handler, Request, Response, request::RequestMetadataInternal},
+    prelude::Middleware,
+};
 use hyper::body::Incoming;
 use layer::Layer;
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 
@@ -12,13 +15,51 @@ mod method;
 
 pub use method::MethodKind;
 
+/// Total number of HTTP methods tracked.
+const METHOD_COUNT: usize = 9;
+
 pub type LayerIndices = SmallVec<[usize; 8]>;
 
 #[derive(Debug, Default)]
 pub struct MethodRouter {
     pub matcher: matchit::Router<usize>,
     pub indices: Vec<LayerIndices>,
-    pub path_to_idx: HashMap<Arc<str>, usize>,
+    pub path_to_idx: FxHashMap<Arc<str>, usize>,
+}
+
+/// Fixed-size array of per-method routers, indexed by `MethodKind as usize`.
+/// Replaces `HashMap<MethodKind, MethodRouter>` for O(1) dispatch.
+#[derive(Default)]
+pub struct MethodRoutes([Option<MethodRouter>; METHOD_COUNT]);
+
+impl MethodRoutes {
+    #[inline]
+    pub fn get(&self, method: MethodKind) -> Option<&MethodRouter> {
+        self.0[method as usize].as_ref()
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, method: MethodKind) -> Option<&mut MethodRouter> {
+        self.0[method as usize].as_mut()
+    }
+
+    #[inline]
+    pub fn entry_or_default(&mut self, method: MethodKind) -> &mut MethodRouter {
+        self.0[method as usize].get_or_insert_with(MethodRouter::default)
+    }
+
+    /// Iterate over all (MethodKind, &MethodRouter) pairs that are present.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (MethodKind, &MethodRouter)> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|r| (MethodKind::from_index(i), r)))
+    }
+
+    pub fn contains_method(&self, method: MethodKind) -> bool {
+        self.0[method as usize].is_some()
+    }
 }
 
 impl MethodRouter {
@@ -43,12 +84,13 @@ pub struct MiddlewareMatcher {
     pub indices: LayerIndices,
 }
 
-pub type MethodRoutes = HashMap<MethodKind, MethodRouter>;
-
 /// The core routing engine for `express_rs`.
 pub struct Router<B = Incoming> {
     pub stack: Vec<Layer<B>>,
     pub middleware_matchers: Vec<MiddlewareMatcher>,
+    /// Side-index: path string → position in `middleware_matchers`.
+    /// Kept in sync so `use_with` and `use_router` run in O(1) for path dedup.
+    middleware_path_index: FxHashMap<Arc<str>, usize>,
     pub routes: MethodRoutes,
     pub not_found_handler: Option<Arc<dyn Handler<B>>>,
 }
@@ -58,7 +100,8 @@ impl<B> Default for Router<B> {
         Self {
             stack: Vec::new(),
             middleware_matchers: Vec::new(),
-            routes: HashMap::default(),
+            middleware_path_index: FxHashMap::default(),
+            routes: MethodRoutes::default(),
             not_found_handler: None,
         }
     }
@@ -78,7 +121,7 @@ impl<B: Send + 'static> Router<B> {
         let path: Arc<str> = p.into();
         let layer_index = self.stack.len();
 
-        let method_routes = self.routes.entry(method).or_default();
+        let method_routes = self.routes.entry_or_default(method);
         method_routes.add_route(&path, layer_index);
 
         let layer = Layer::route(Arc::clone(&path), method, vec![], Arc::new(handler));
@@ -105,38 +148,35 @@ impl<B: Send + 'static> Router<B> {
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
         let path: Arc<str> = path.as_ref().into();
         let layer_index = self.stack.len();
-        
-        let mut found = false;
-        for matcher in &mut self.middleware_matchers {
-            if matcher.path == path {
-                matcher.indices.push(layer_index);
-                found = true;
-                break;
-            }
-        }
 
-        if !found {
+        // O(1) lookup using the side-index instead of a linear scan.
+        if let Some(&idx) = self.middleware_path_index.get(&path) {
+            self.middleware_matchers[idx].indices.push(layer_index);
+        } else {
             let mut router = matchit::Router::new();
             let p = path.as_ref();
             router.insert(p, ()).ok();
-            
+
             // Express-style prefix matching: /path should match /path, /path/, and /path/sub
             if p == "/" {
-                router.insert("/*middleware_wildcard", ()).ok();
+                router.insert("/*path", ()).ok();
             } else {
                 let prefix_path = if p.ends_with('/') {
-                    format!("{}*middleware_wildcard", p)
+                    format!("{}*path", p)
                 } else {
-                    format!("{}/*middleware_wildcard", p)
+                    format!("{}/*path", p)
                 };
                 router.insert(prefix_path, ()).ok();
             }
 
+            let new_idx = self.middleware_matchers.len();
             self.middleware_matchers.push(MiddlewareMatcher {
                 path: Arc::clone(&path),
                 router,
                 indices: smallvec![layer_index],
             });
+            self.middleware_path_index
+                .insert(Arc::clone(&path), new_idx);
         }
 
         let layer = Layer::middleware(Arc::clone(&path), vec![Arc::new(middleware)]);
@@ -157,9 +197,9 @@ impl<B: Send + 'static> Router<B> {
         } else {
             raw_path
         };
-        let method = &MethodKind::from_hyper(req.method());
+        let method = MethodKind::from_hyper(req.method());
 
-        let mut matched = SmallVec::<[&usize; 8]>::new();
+        let mut matched = SmallVec::<[usize; 8]>::new();
         let mut route_params = SmallVec::<[(interner::Symbol, Arc<str>); 4]>::new();
 
         for matcher in &self.middleware_matchers {
@@ -168,7 +208,7 @@ impl<B: Send + 'static> Router<B> {
                     let sym_k = INTERNER.get_or_intern(k);
                     route_params.push((sym_k, v.into()));
                 }
-                matched.extend(matcher.indices.iter());
+                matched.extend(matcher.indices.iter().copied());
             }
         }
 
@@ -186,11 +226,13 @@ impl<B: Send + 'static> Router<B> {
                 }
             }
 
-            matched.extend(method_routes.indices[*route_match.value].iter());
+            matched.extend(method_routes.indices[*route_match.value].iter().copied());
         }
 
         if !path_exists {
-            for (m, method_routes) in &self.routes {
+            // Check if path exists under a different method (=> 405 vs 404).
+            // O(methods) matchit lookups only on cache misses — acceptable.
+            for (m, method_routes) in self.routes.iter() {
                 if m != method && method_routes.matcher.at(path).is_ok() {
                     path_exists = true;
                     break;
@@ -215,39 +257,37 @@ impl<B: Send + 'static> Router<B> {
 
         req.set_params(route_params);
 
+        // Sort by index to maintain registration order across all layers.
+        // This is necessary because middlewares and routes are collected separately.
         if matched.len() > 1 {
             matched.sort_unstable();
-            matched.dedup();
         }
 
         let mut req_opt = Some(req);
         let mut res_opt = Some(res);
 
         for i in matched {
-            let layer = &self.stack[*i];
+            let layer = &self.stack[i];
 
             if let Some(m) = &layer.method {
-                if m != method {
+                if *m != method {
                     continue;
                 }
             }
 
-            let mut stopped = false;
             for mw in &layer.middlewares {
                 let req_mut = req_opt.as_mut().unwrap();
                 let res_mut = res_opt.as_mut().unwrap();
                 if mw.call(req_mut, res_mut).await.is_stop() {
-                    stopped = true;
-                    break;
+                    // A middleware signalled Stop — halt the entire chain.
+                    return res_opt.unwrap();
                 }
             }
 
-            if stopped {
-                return res_opt.unwrap();
-            }
-
             if let Some(h) = &layer.handler {
-                return h.call(req_opt.take().unwrap(), res_opt.take().unwrap()).await;
+                return h
+                    .call(req_opt.take().unwrap(), res_opt.take().unwrap())
+                    .await;
             }
         }
 
@@ -255,14 +295,19 @@ impl<B: Send + 'static> Router<B> {
 
         if status == 404 {
             if let Some(h) = &self.not_found_handler {
-                return h.call(req_opt.take().unwrap(), res_opt.take().unwrap()).await;
+                return h
+                    .call(req_opt.take().unwrap(), res_opt.take().unwrap())
+                    .await;
             }
         }
 
-        res_opt.unwrap().status_code(status).send_text(match status {
-            404 => "Not Found",
-            _ => "Method Not Allowed",
-        })
+        res_opt
+            .unwrap()
+            .status_code(status)
+            .send_text(match status {
+                404 => "Not Found",
+                _ => "Method Not Allowed",
+            })
     }
 
     pub fn use_router(&mut self, prefix: impl AsRef<str>, router: Router<B>) -> &mut Self {
@@ -280,27 +325,31 @@ impl<B: Send + 'static> Router<B> {
             let layer_index = self.stack.len();
 
             if let Some(method) = layer.method {
-                let method_routes = self.routes.entry(method).or_default();
+                let method_routes = self.routes.entry_or_default(method);
                 method_routes.add_route(&new_path, layer_index);
             } else {
-                let mut found = false;
-                for matcher in &mut self.middleware_matchers {
-                    if matcher.path == new_path {
-                        matcher.indices.push(layer_index);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if !found {
+                // O(1) lookup via side-index.
+                if let Some(&idx) = self.middleware_path_index.get(&new_path) {
+                    self.middleware_matchers[idx].indices.push(layer_index);
+                } else {
+                    let p = new_path.as_ref();
                     let mut r = matchit::Router::new();
-                    r.insert(new_path.as_ref(), ())
-                        .expect("Failed to insert nested middleware");
+                    r.insert(p, ()).expect("Failed to insert nested middleware");
+                    // Include wildcard sub-path so mounted middleware also matches /prefix/sub/paths
+                    if p == "/" {
+                        r.insert("/*path", ()).ok();
+                    } else {
+                        let wildcard = format!("{}/*path", p);
+                        r.insert(&wildcard, ()).ok();
+                    }
+                    let new_idx = self.middleware_matchers.len();
                     self.middleware_matchers.push(MiddlewareMatcher {
                         path: Arc::clone(&new_path),
                         router: r,
                         indices: smallvec![layer_index],
                     });
+                    self.middleware_path_index
+                        .insert(Arc::clone(&new_path), new_idx);
                 }
             }
 
@@ -418,6 +467,16 @@ impl<B: Send + 'static> Router<B> {
     }
 }
 
+impl std::fmt::Debug for MethodRoutes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        for (m, r) in self.iter() {
+            map.entry(&m, r);
+        }
+        map.finish()
+    }
+}
+
 /// A route builder for a specific path, allowing for method chaining.
 pub struct Route<'a, B = Incoming> {
     router: &'a mut Router<B>,
@@ -427,7 +486,8 @@ pub struct Route<'a, B = Incoming> {
 impl<'a, B: Send + 'static> Route<'a, B> {
     pub fn all(&mut self, handler: impl Handler<B> + Clone) -> &mut Self {
         for &method in &MethodKind::ALL {
-            self.router.route(self.path.as_ref(), handler.clone(), method);
+            self.router
+                .route(self.path.as_ref(), handler.clone(), method);
         }
         self
     }
@@ -445,5 +505,57 @@ impl<B> std::fmt::Debug for Router<B> {
         f.debug_struct("Router")
             .field("stack_len", &self.stack.len())
             .finish()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::Response;
+
+    async fn mock_handler<B: Send + 'static>(_req: Request<B>, res: Response) -> Response {
+        res.send_text("ok")
+    }
+
+    #[test]
+    fn test_router_add_route() {
+        let mut router = Router::<()>::default();
+        router.get("/", mock_handler);
+
+        assert_eq!(router.stack.len(), 1);
+        assert!(router.routes.contains_method(MethodKind::Get));
+    }
+
+    #[test]
+    fn test_router_all_methods() {
+        let mut router = Router::<()>::default();
+        router.all("/all", mock_handler);
+
+        // MethodKind::ALL has several methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, CONNECT, TRACE)
+        assert!(router.stack.len() >= 5);
+        for &method in &MethodKind::ALL {
+            assert!(router.routes.contains_method(method));
+        }
+    }
+
+    #[test]
+    fn test_router_trailing_slash_normalization() {
+        let mut router = Router::<()>::default();
+        router.get("/test/", mock_handler);
+
+        let method_router = router.routes.get(MethodKind::Get).unwrap();
+        assert!(method_router.path_to_idx.contains_key("/test"));
+        assert!(!method_router.path_to_idx.contains_key("/test/"));
+    }
+
+    #[test]
+    fn test_router_use_with() {
+        let mut router = Router::<()>::default();
+        router.use_with("/api", |_: &mut Request<()>, _: &mut Response| async {
+            crate::middleware::next_res()
+        });
+
+        assert_eq!(router.stack.len(), 1);
+        assert_eq!(router.middleware_matchers.len(), 1);
+        assert_eq!(router.middleware_matchers[0].path.as_ref(), "/api");
     }
 }

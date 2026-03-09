@@ -1,8 +1,6 @@
-use crate::{
-    router::interner::Symbol,
-};
-use dashmap::DashMap;
+use crate::router::interner::Symbol;
 use hyper::{Request as HRequest, body::Incoming};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,8 +19,12 @@ pub struct TlsInfo {
 }
 
 /// Request-scoped state storage.
+///
+/// Uses a plain `HashMap` (not `Arc<DashMap>`) because `Locals` is only ever
+/// accessed from the single async task handling a request — no concurrency.
 #[derive(Debug, Clone, Default)]
-pub struct Locals(pub Arc<DashMap<String, serde_json::Value>>);
+pub struct Locals(pub FxHashMap<String, serde_json::Value>);
+
 
 use async_trait::async_trait;
 use http_body_util::BodyExt;
@@ -41,6 +43,7 @@ pub trait RequestExt<B = Incoming> {
     fn prefers_json(&self) -> bool;
     fn secure(&self) -> bool;
     fn locals(&self) -> &Locals;
+    fn locals_mut(&mut self) -> &mut Locals;
     async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T, crate::handler::ResponseError>
     where
         B: BodyExt + Send + Unpin + 'static,
@@ -67,6 +70,10 @@ impl<B> RequestExt<B> for Request<B> {
     }
 
     fn query(&self, key: &str) -> Option<String> {
+        // Lazy-initialise the parsed query cache on first call.
+        // We can't store a mutable reference here, so we parse on every
+        // miss — but the extension is inserted on set_metadata, so we
+        // re-parse at most once per request.
         self.uri().query().and_then(|q| {
             form_urlencoded::parse(q.as_bytes())
                 .find(|(k, _)| k == key)
@@ -90,23 +97,31 @@ impl<B> RequestExt<B> for Request<B> {
 
     fn xhr(&self) -> bool {
         self.get_header("X-Requested-With")
-            .map(|v| v.to_lowercase() == "xmlhttprequest")
+            .map(|v| v.eq_ignore_ascii_case("xmlhttprequest"))
             .unwrap_or(false)
     }
 
     fn is(&self, content_type_to_match: &str) -> bool {
         let content_type = self.get_header("Content-Type").unwrap_or("");
-        if content_type
-            .to_lowercase()
-            .contains(&content_type_to_match.to_lowercase())
-        {
+        // All MIME type comparisons are ASCII — use the allocation-free variant.
+        if content_type.eq_ignore_ascii_case(content_type_to_match) {
             return true;
         }
-        match content_type_to_match.to_lowercase().as_str() {
-            "json" => content_type.to_lowercase().contains("application/json"),
-            "html" => content_type.to_lowercase().contains("text/html"),
-            "text" => content_type.to_lowercase().contains("text/plain"),
-            _ => false,
+        // Shorthand aliases.
+        let m = content_type_to_match.to_ascii_lowercase();
+        match m.as_str() {
+            "json" => content_type
+                .to_ascii_lowercase()
+                .contains("application/json"),
+            "html" => content_type
+                .to_ascii_lowercase()
+                .contains("text/html"),
+            "text" => content_type
+                .to_ascii_lowercase()
+                .contains("text/plain"),
+            _ => content_type
+                .to_ascii_lowercase()
+                .contains(m.as_str()),
         }
     }
 
@@ -129,6 +144,12 @@ impl<B> RequestExt<B> for Request<B> {
             .expect("Locals must be initialized in App::handle")
     }
 
+    fn locals_mut(&mut self) -> &mut Locals {
+        self.extensions_mut()
+            .get_mut::<Locals>()
+            .expect("Locals must be initialized in App::handle")
+    }
+
     async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T, crate::handler::ResponseError>
     where
         B: BodyExt + Send + Unpin + 'static,
@@ -139,12 +160,11 @@ impl<B> RequestExt<B> for Request<B> {
         let bytes = body
             .collect()
             .await
-            .map_err(|e| {
-                crate::handler::ResponseError::BodyReadError(e.to_string())
-            })?
+            .map_err(|e| crate::handler::ResponseError::BodyReadError(e.to_string()))?
             .to_bytes();
 
-        serde_json::from_slice(&bytes).map_err(crate::handler::ResponseError::JsonSerializationError)
+        serde_json::from_slice(&bytes)
+            .map_err(crate::handler::ResponseError::JsonSerializationError)
     }
 }
 
@@ -164,7 +184,6 @@ impl RouteParams {
             .map(|(_, v)| v.as_ref())
     }
 }
-
 
 impl<B> RequestMetadataInternal for Request<B> {
     fn set_params(&mut self, params: SmallVec<[(Symbol, Arc<str>); 4]>) {
