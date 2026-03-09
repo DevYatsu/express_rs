@@ -534,7 +534,6 @@ fn ext_to_mime(ext: &str) -> &'static str {
 /// Concurrent, shard-sharded file cache.
 static FILE_CACHE: Lazy<Cache<String, (HeaderValue, Bytes)>> = Lazy::new(|| Cache::new(100));
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
