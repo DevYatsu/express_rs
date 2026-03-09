@@ -3,7 +3,7 @@ use hyper::header::{self, HeaderValue};
 use local_ip_address::local_ip;
 use log::info;
 use serde_json::json;
-use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+use std::sync::{atomic::{AtomicU32, Ordering}};
 
 fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
@@ -27,7 +27,7 @@ pub struct State {
     request_count: AtomicU32,
 }
 
-express_state!(STATE, State, State::default());
+express_state!(STATE, State);
 
 #[tokio::main]
 async fn main() {

@@ -12,8 +12,8 @@ pub mod prelude;
 /// one-time initialization with minimal overhead.
 #[macro_export]
 macro_rules! express_state {
-    ($name:ident, $type:ty, $init:expr) => {
-        static $name: $crate::reexports::Lazy<$type> = $crate::reexports::Lazy::new(|| $init);
+    ($name:ident, $type:ty) => {
+        static $name: $crate::reexports::Lazy<$type> = $crate::reexports::Lazy::new(<$type>::default);
     };
 }
 
