@@ -10,7 +10,7 @@ pub mod middleware;
 pub mod router;
 mod server;
 
-/// Re-exported items necessary for express_rs functionality.
+/// Re-exported items necessary for expressjs functionality.
 pub mod prelude;
 
 /// Helper macro to initialize a high-performance global state.

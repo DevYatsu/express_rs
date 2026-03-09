@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_rustls::rustls::ServerConfig;
 
-/// The main application structure for `express_rs`.
+/// The main application structure for `expressjs`.
 pub struct App<B: Send + 'static = Incoming> {
     /// The inner router used by the application to match and handle paths.
     pub router: Router<B>,
@@ -35,6 +35,12 @@ impl<B: Send + 'static> App<B> {
     /// Attaches a middleware to a specific path prefix.
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
         self.router.use_with(path, middleware);
+        self
+    }
+
+    /// Attaches a middleware to all paths.
+    pub fn use_global(&mut self, middleware: impl Middleware<B>) -> &mut Self {
+        self.router.use_with("/{*p}", middleware);
         self
     }
 

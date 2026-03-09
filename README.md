@@ -1,13 +1,13 @@
 <div align="center">
-  <h1>express_rs</h1>
+  <h1>expressjs</h1>
   <p>
     <strong>A blazing-fast, minimal, and ergonomic web framework for Rust, inspired by Express.js.</strong>
   </p>
   <p>
-    <a href="https://crates.io/crates/express_rs"><img src="https://img.shields.io/crates/v/express_rs.svg" alt="Crates.io" /></a>
-    <a href="https://docs.rs/express_rs"><img src="https://docs.rs/express_rs/badge.svg" alt="docs.rs" /></a>
-    <a href="https://github.com/DevYatsu/express_rs/actions"><img src="https://img.shields.io/github/actions/workflow/status/DevYatsu/express_rs/ci.yml" alt="CI Status" /></a>
-    <a href="https://crates.io/crates/express_rs"><img src="https://img.shields.io/crates/d/express_rs.svg" alt="Downloads" /></a>
+    <a href="https://crates.io/crates/expressjs"><img src="https://img.shields.io/crates/v/expressjs.svg" alt="Crates.io" /></a>
+    <a href="https://docs.rs/expressjs"><img src="https://docs.rs/expressjs/badge.svg" alt="docs.rs" /></a>
+    <a href="https://github.com/DevYatsu/expressjs/actions"><img src="https://img.shields.io/github/actions/workflow/status/DevYatsu/expressjs/ci.yml" alt="CI Status" /></a>
+    <a href="https://crates.io/crates/expressjs"><img src="https://img.shields.io/crates/d/expressjs.svg" alt="Downloads" /></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   </p>
 </div>
@@ -16,7 +16,7 @@
 
 ## Overview
 
-**express_rs** aims to provide a clean, expressive, and flexible web framework modeled after the ergonomics of Express.js, but with the performance, safety guarantees, and zero-cost abstractions of Rust.
+**expressjs** aims to provide a clean, expressive, and flexible web framework modeled after the ergonomics of Express.js, but with the performance, safety guarantees, and zero-cost abstractions of Rust.
 
 Our goal is simple: **no macro magic, no boilerplate, just modular, async-first routing, powerful middleware, and composable handlers.**
 
@@ -40,17 +40,17 @@ Our goal is simple: **no macro magic, no boilerplate, just modular, async-first 
 
 ## Getting Started
 
-Add `express_rs` to your `Cargo.toml`:
+Add `expressjs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-express_rs = "0.1.0"
+expressjs = "0.1.0"
 ```
 
 ### Basic Example
 
 ```rust,ignore
-use express_rs::prelude::*;
+use expressjs::prelude::*;
 
 #[tokio::main]
 async fn main() {
@@ -61,7 +61,7 @@ async fn main() {
 
     // Simple routing
     app.get("/", async |_req, res| {
-        res.send_text("Hello from express_rs!")
+        res.send_text("Hello from expressjs!")
     });
 
     // JSON response
@@ -81,7 +81,7 @@ async fn main() {
 Just like Express, you can mount routers to organize your controllers:
 
 ```rust,ignore
-use express_rs::router::Router;
+use expressjs::router::Router;
 
 let mut app = express();
 
@@ -98,7 +98,7 @@ app.use_router("/users", users_router);
 A robust set of middlewares is provided out of the box to help secure and optimize your app. For instance, setting up secure headers and rate limiting:
 
 ```rust,ignore
-use express_rs::middleware::{rate_limit::*, security_headers::*};
+use expressjs::middleware::{rate_limit::*, security_headers::*};
 
 // Restrict to 100 requests per 15 minutes per IP
 app.use_with("/{*p}", RateLimit::new(100, std::time::Duration::from_secs(900)));
@@ -109,7 +109,7 @@ app.use_with("/{*p}", SecurityHeaders::default());
 
 ## Performance
 
-`express_rs` is built for speed:
+`expressjs` is built for speed:
 - Routes are resolved natively using a specialized Radix tree.
 - Minimal to **zero** heap allocations on a typical incoming HTTP request due to clever internal optimizations.
 - Handlers are represented as lightweight function pointers/closures under a uniform `Handler` trait.

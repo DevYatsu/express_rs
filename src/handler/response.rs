@@ -14,7 +14,6 @@ use std::borrow::Cow;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
@@ -59,7 +58,9 @@ pub struct Response {
 pub enum ResponseBody {
     /// An empty body.
     Empty,
-    /// A body buffered in memory.
+    /// A single chunk body.
+    Full(Bytes),
+    /// A body buffered in memory with multiple chunks.
     Buffered(Vec<Bytes>),
     /// A streaming body.
     Stream(
@@ -71,6 +72,7 @@ impl std::fmt::Debug for ResponseBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResponseBody::Empty => write!(f, "Empty"),
+            ResponseBody::Full(bytes) => f.debug_tuple("Full").field(bytes).finish(),
             ResponseBody::Buffered(chunks) => f.debug_tuple("Buffered").field(chunks).finish(),
             ResponseBody::Stream(_) => write!(f, "Stream(...)"),
         }
@@ -127,10 +129,19 @@ pub trait ExpressResponse: Sized {
     fn redirect<T: AsRef<str>>(self, url: T) -> Self;
     /// Sets a cookie.
     fn cookie(self, cookie: Cookie<'_>) -> Self;
+    /// Sets status to 200 OK.
+    fn ok(self) -> Self;
+    /// Sends a JSON response (alias for `send_json`).
+    fn json<T: Serialize>(self, data: &T) -> Self;
+    /// Sends a plain text response (alias for `send_text`).
+    fn text<T: Into<Cow<'static, str>>>(self, text: T) -> Self;
+    /// Sends an HTML response (alias for `send_html`).
+    fn html<T: Into<Cow<'static, str>>>(self, html: T) -> Self;
 }
 
 impl Response {
     /// Creates a new, empty HTTP 200 OK response.
+    #[inline]
     pub fn new() -> Self {
         Self {
             status: StatusCode::OK,
@@ -140,32 +151,14 @@ impl Response {
         }
     }
 
-    /// Creates a new HTTP 200 OK response. Alias for `new()`.
-    pub fn ok() -> Self {
-        Self::new()
-    }
-
-    /// Creates a new HTTP 200 OK response with a JSON body.
-    pub fn ok_json<T: Serialize>(data: &T) -> Self {
-        Self::new().send_json(data)
-    }
-
-    /// Creates a new HTTP 200 OK response with a text body.
-    pub fn ok_text<T: Into<Cow<'static, str>>>(text: T) -> Self {
-        Self::new().send_text(text)
-    }
-
-    /// Creates a new HTTP 200 OK response with an HTML body.
-    pub fn ok_html<T: Into<Cow<'static, str>>>(html: T) -> Self {
-        Self::new().send_html(html)
-    }
-
     /// Creates a redirect response to the specified URL.
+    #[inline]
     pub fn redirect<T: AsRef<str>>(url: T) -> Self {
         Self::new().redirect(url)
     }
 
     /// Creates an HTTP 404 Not Found response.
+    #[inline]
     pub fn not_found() -> Self {
         Self::new()
             .status(StatusCode::NOT_FOUND)
@@ -180,24 +173,27 @@ impl Response {
     }
 
     /// Gets the current HTTP status of the response.
+    #[inline]
     pub fn get_status(&self) -> StatusCode {
         self.status
     }
 
     /// Converts this `Response` builder into a standard hyper response.
-    pub fn into_hyper(mut self) -> ServerResponse {
+    pub fn into_hyper(self) -> ServerResponse {
         let body: BoxBody<Bytes, std::convert::Infallible> = match self.body {
             ResponseBody::Empty => Full::new(Bytes::new()).map_err(|n| match n {}).boxed(),
+            ResponseBody::Full(bytes) => Full::new(bytes).map_err(|n| match n {}).boxed(),
             ResponseBody::Buffered(mut chunks) => {
-                if chunks.is_empty() {
+                let len = chunks.len();
+                if len == 0 {
                     Full::new(Bytes::new()).map_err(|n| match n {}).boxed()
-                } else if chunks.len() == 1 {
+                } else if len == 1 {
                     Full::new(chunks.pop().unwrap())
                         .map_err(|n| match n {})
                         .boxed()
                 } else {
-                    let mut ret =
-                        bytes::BytesMut::with_capacity(chunks.iter().map(|c| c.len()).sum());
+                    let total_capacity = chunks.iter().map(|c| c.len()).sum();
+                    let mut ret = bytes::BytesMut::with_capacity(total_capacity);
                     for chunk in chunks {
                         ret.extend_from_slice(&chunk);
                     }
@@ -209,20 +205,16 @@ impl Response {
                 .boxed(),
         };
 
-        let mut hyper_res = hyper::Response::builder()
-            .status(self.status)
-            .body(body)
-            .unwrap();
+        let mut builder = hyper::Response::builder().status(self.status);
 
-        hyper_res.headers_mut().extend(self.headers.drain());
-        hyper_res
+        if let Some(headers) = builder.headers_mut() {
+            *headers = self.headers;
+        }
+
+        builder.body(body).unwrap()
     }
 
     /// Populate `self` with an error status, content-type and body.
-    ///
-    /// Previously this used the consuming builder on `&mut Self`, silently
-    /// dropping the returned value. Now we build the finished response and
-    /// assign it back with `*self = …` so the mutation actually takes effect.
     pub fn respond_error(
         &mut self,
         status: u16,
@@ -230,51 +222,54 @@ impl Response {
         json_body: serde_json::Value,
         json: bool,
     ) -> &mut Self {
-        let built = if json {
-            Response::new()
-                .status_code(status)
-                .content_type("application/json")
-                .send_json(&json_body)
+        if let Ok(s) = StatusCode::from_u16(status) {
+            self.status = s;
         } else {
-            Response::new()
-                .status_code(status)
-                .content_type("text/plain; charset=utf-8")
-                .send_text(message.to_owned())
-        };
-        // Preserve any error that may have already been set.
-        let prev_error = self.error.take();
-        *self = built;
-        if self.error.is_none() {
-            self.error = prev_error;
+            self.error = Some(ResponseError::InvalidStatusCode(status));
+            self.status = StatusCode::INTERNAL_SERVER_ERROR;
         }
-        self
+
+        if json {
+            self.send_json(&json_body)
+        } else {
+            // If it's a simple error response, we can often avoid the String allocation if it's static
+            // but since we get &str, we have to clone unless we want to change API to Cow
+            self.send_text(message.to_owned())
+        }
     }
 
     async fn file<T: AsRef<str>>(mut self, path: T) -> Self {
         let path_str = path.as_ref();
 
         // Fast path: concurrent lock-free cache hit.
-        if let Some((mime, cached)) = FILE_CACHE.get(path_str) {
-            self = self.content_type(&*mime);
-            self = self.body((*cached).clone());
+        if let Some((header_val, cached)) = FILE_CACHE.get(path_str) {
+            self.headers.insert(CONTENT_TYPE, header_val);
+            self.body = ResponseBody::Full(cached);
             return self;
         }
 
-        // Open the file once and reuse the handle for both metadata and content.
-        let file = match File::open(path_str).await {
-            Ok(f) => f,
-            Err(e) => {
-                self.error = Some(ResponseError::FileOpenError(e));
-                return self;
+        match self.load_file(path_str).await {
+            Ok((header_val, body)) => {
+                if let ResponseBody::Full(ref bytes) = body {
+                    FILE_CACHE.insert(path_str.to_owned(), (header_val.clone(), bytes.clone()));
+                }
+                self.headers.insert(CONTENT_TYPE, header_val);
+                self.body = body;
+                self
             }
-        };
-        let metadata = match file.metadata().await {
-            Ok(m) => m,
             Err(e) => {
-                self.error = Some(ResponseError::FileOpenError(e));
-                return self;
+                self.error = Some(e);
+                self
             }
-        };
+        }
+    }
+
+    async fn load_file(
+        &self,
+        path_str: &str,
+    ) -> Result<(HeaderValue, ResponseBody), ResponseError> {
+        let file = File::open(path_str).await?;
+        let metadata = file.metadata().await?;
 
         let mime = Path::new(path_str)
             .extension()
@@ -282,32 +277,25 @@ impl Response {
             .and_then(|ext| mime_guess::from_ext(ext).first_raw())
             .unwrap_or("application/octet-stream");
 
-        let content_type: Arc<str> = if mime.starts_with("text/")
+        let header_val = if mime.starts_with("text/")
             || mime == "application/javascript"
             || mime == "application/json"
         {
-            format!("{}: charset=utf-8", mime).into()
+            // Optimize common charset inclusions
+            let mut s = String::with_capacity(mime.len() + 16);
+            s.push_str(mime);
+            s.push_str("; charset=utf-8");
+            mime_to_header_value(&s).unwrap()
         } else {
-            mime.into()
+            mime_to_header_value(mime).unwrap()
         };
 
         if metadata.len() < 1024 * 1024 {
-            // Small file: buffer and cache.
-            let bytes = match tokio::fs::read(path_str).await {
-                Ok(b) => Bytes::from(b),
-                Err(e) => {
-                    self.error = Some(ResponseError::FileOpenError(e));
-                    return self;
-                }
-            };
-            let cached = Arc::new(bytes.clone());
-            FILE_CACHE.insert(path_str.to_owned(), (Arc::clone(&content_type), cached));
-            self.content_type(&*content_type).body(bytes)
+            let bytes = tokio::fs::read(path_str).await?;
+            Ok((header_val, ResponseBody::Full(Bytes::from(bytes))))
         } else {
-            // Large file: stream directly from the already-opened handle.
             let stream = ReaderStream::new(file).map(|res| res.map(Frame::data));
-            self.body = ResponseBody::Stream(Box::pin(stream));
-            self.content_type(&*content_type)
+            Ok((header_val, ResponseBody::Stream(Box::pin(stream))))
         }
     }
 
@@ -320,12 +308,14 @@ impl Response {
 macro_rules! impl_express_response {
     ($target:ty) => {
         impl ExpressResponse for $target {
+            #[inline]
             #[allow(unused_mut)]
             fn status(mut self, status: StatusCode) -> Self {
                 self.status = status;
                 self
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn status_code(mut self, code: u16) -> Self {
                 match StatusCode::from_u16(code) {
@@ -335,6 +325,7 @@ macro_rules! impl_express_response {
                 self
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn header<K, V>(mut self, key: K, value: V) -> Self
             where
@@ -345,14 +336,16 @@ macro_rules! impl_express_response {
                 self
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn content_type<T: AsRef<str>>(mut self, mime_type: T) -> Self {
-                if let Ok(val) = HeaderValue::from_str(mime_type.as_ref()) {
+                if let Some(val) = mime_to_header_value(mime_type.as_ref()) {
                     self.headers.insert(CONTENT_TYPE, val);
                 }
                 self
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn location<T: AsRef<str>>(mut self, url: T) -> Self {
                 self.headers
@@ -360,41 +353,46 @@ macro_rules! impl_express_response {
                 self
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn body<T: Into<Bytes>>(mut self, data: T) -> Self {
-                self.body = ResponseBody::Buffered(vec![data.into()]);
+                self.body = ResponseBody::Full(data.into());
                 self
             }
 
             #[allow(unused_mut)]
             fn write<T: Into<Bytes>>(mut self, data: T) -> Self {
                 let bytes = data.into();
-                match &mut self.body {
-                    ResponseBody::Buffered(chunks) => {
+                match std::mem::replace(&mut self.body, ResponseBody::Empty) {
+                    ResponseBody::Empty => {
+                        self.body = ResponseBody::Full(bytes);
+                    }
+                    ResponseBody::Full(prev) => {
+                        self.body = ResponseBody::Buffered(vec![prev, bytes]);
+                    }
+                    ResponseBody::Buffered(mut chunks) => {
                         chunks.push(bytes);
+                        self.body = ResponseBody::Buffered(chunks);
                     }
                     _ => {
-                        self.body = ResponseBody::Buffered(vec![bytes]);
+                        // If it was a stream or something else, we overwrite it.
+                        // Or we could decide to keep it, but body/write usually imply replacement or appending to buffer.
+                        self.body = ResponseBody::Full(bytes);
+                        // Logically if it was a stream we're dropping it.
                     }
                 }
                 self
             }
 
+            #[inline]
             fn send_text<T: Into<Cow<'static, str>>>(self, text: T) -> Self {
-                let cow = text.into();
-                let bytes = match cow {
-                    Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-                    Cow::Owned(s) => Bytes::from(s),
-                };
+                let bytes = cow_to_bytes(text.into());
                 self.content_type("text/plain; charset=utf-8").body(bytes)
             }
 
+            #[inline]
             fn send_html<T: Into<Cow<'static, str>>>(self, html: T) -> Self {
-                let cow = html.into();
-                let bytes = match cow {
-                    Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
-                    Cow::Owned(s) => Bytes::from(s),
-                };
+                let bytes = cow_to_bytes(html.into());
                 self.content_type("text/html; charset=utf-8").body(bytes)
             }
 
@@ -410,12 +408,14 @@ macro_rules! impl_express_response {
                 }
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn redirect<T: AsRef<str>>(mut self, url: T) -> Self {
                 self.status = StatusCode::FOUND;
                 self.location(url)
             }
 
+            #[inline]
             #[allow(unused_mut)]
             fn cookie(mut self, cookie: Cookie<'_>) -> Self {
                 if let Ok(val) = HeaderValue::from_str(&cookie.to_string()) {
@@ -423,8 +423,56 @@ macro_rules! impl_express_response {
                 }
                 self
             }
+
+            #[inline]
+            fn ok(self) -> Self {
+                self.status(StatusCode::OK)
+            }
+
+            #[inline]
+            fn json<T: Serialize>(self, data: &T) -> Self {
+                self.send_json(data)
+            }
+
+            #[inline]
+            fn text<T: Into<Cow<'static, str>>>(self, text: T) -> Self {
+                self.send_text(text)
+            }
+
+            #[inline]
+            fn html<T: Into<Cow<'static, str>>>(self, html: T) -> Self {
+                self.send_html(html)
+            }
         }
     };
+}
+
+fn cow_to_bytes(cow: Cow<'static, str>) -> Bytes {
+    match cow {
+        Cow::Borrowed(s) => Bytes::from_static(s.as_bytes()),
+        Cow::Owned(s) => Bytes::from(s),
+    }
+}
+
+/// Fast lookup for common MIME types to avoid `HeaderValue::from_str` validation and allocation.
+#[inline]
+fn mime_to_header_value(mime: &str) -> Option<HeaderValue> {
+    match mime {
+        "application/json" => Some(HeaderValue::from_static("application/json")),
+        "text/plain; charset=utf-8" => Some(HeaderValue::from_static("text/plain; charset=utf-8")),
+        "text/html; charset=utf-8" => Some(HeaderValue::from_static("text/html; charset=utf-8")),
+        "text/css; charset=utf-8" => Some(HeaderValue::from_static("text/css; charset=utf-8")),
+        "application/javascript; charset=utf-8" => Some(HeaderValue::from_static(
+            "application/javascript; charset=utf-8",
+        )),
+        "text/plain" => Some(HeaderValue::from_static("text/plain; charset=utf-8")),
+        "text/html" => Some(HeaderValue::from_static("text/html; charset=utf-8")),
+        "text/css" => Some(HeaderValue::from_static("text/css; charset=utf-8")),
+        "application/javascript" => Some(HeaderValue::from_static(
+            "application/javascript; charset=utf-8",
+        )),
+        _ => HeaderValue::from_str(mime).ok(),
+    }
 }
 
 impl_express_response!(Response);
@@ -434,11 +482,8 @@ fn sanitize_header_value(val: &str) -> HeaderValue {
     HeaderValue::from_str(val).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
-/// Concurrent, shard-sharded file cache — replaces the previous
-/// `tokio::sync::Mutex<LruCache>` global bottleneck.
-/// `quick_cache::sync::Cache` is lock-free on reads and uses fine-grained
-/// sharding on writes.
-static FILE_CACHE: Lazy<Cache<String, (Arc<str>, Arc<Bytes>)>> = Lazy::new(|| Cache::new(100));
+/// Concurrent, shard-sharded file cache.
+static FILE_CACHE: Lazy<Cache<String, (HeaderValue, Bytes)>> = Lazy::new(|| Cache::new(100));
 
 #[cfg(test)]
 mod tests {
@@ -454,10 +499,9 @@ mod tests {
 
         assert_eq!(res.status, StatusCode::CREATED);
         assert_eq!(res.headers.get("X-Test").unwrap(), "value");
-        if let ResponseBody::Buffered(chunks) = res.body {
-            assert_eq!(chunks[0], Bytes::from("hello"));
-        } else {
-            panic!("Expected buffered body");
+        match res.body {
+            ResponseBody::Full(bytes) => assert_eq!(bytes, Bytes::from("hello")),
+            _ => panic!("Expected full body"),
         }
     }
 
@@ -467,10 +511,9 @@ mod tests {
         let res = Response::new().send_json(&data);
 
         assert_eq!(res.headers.get(CONTENT_TYPE).unwrap(), "application/json");
-        if let ResponseBody::Buffered(chunks) = res.body {
-            assert_eq!(chunks[0], Bytes::from("{\"foo\":\"bar\"}"));
-        } else {
-            panic!("Expected buffered body");
+        match res.body {
+            ResponseBody::Full(bytes) => assert_eq!(bytes, Bytes::from("{\"foo\":\"bar\"}")),
+            _ => panic!("Expected full body"),
         }
     }
 

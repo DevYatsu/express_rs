@@ -1,4 +1,4 @@
-//! Common imports for `express_rs`.
+//! Common imports for `expressjs`.
 
 pub use crate::application::App;
 pub use crate::express;

@@ -98,7 +98,7 @@ pub struct MiddlewareMatcher {
     pub indices: LayerIndices,
 }
 
-/// The core routing engine for `express_rs`.
+/// The core routing engine for `expressjs`.
 pub struct Router<B = Incoming> {
     /// The linear list of layers attached to the router.
     pub stack: Vec<Layer<B>>,
@@ -172,7 +172,11 @@ impl<B: Send + 'static> Router<B> {
 
     /// Mounts a middleware function at the specified path prefix.
     pub fn use_with(&mut self, path: impl AsRef<str>, middleware: impl Middleware<B>) -> &mut Self {
-        let path: Arc<str> = path.as_ref().into();
+        let mut p = path.as_ref();
+        if p.len() > 1 && p.ends_with('/') {
+            p = &p[..p.len() - 1];
+        }
+        let path: Arc<str> = p.into();
         let layer_index = self.stack.len();
 
         // O(1) lookup using the side-index instead of a linear scan.
@@ -180,18 +184,16 @@ impl<B: Send + 'static> Router<B> {
             self.middleware_matchers[idx].indices.push(layer_index);
         } else {
             let mut router = matchit::Router::new();
-            let p = path.as_ref();
-            router.insert(p, ()).ok();
+            let p_str = path.as_ref();
+            // Match the path itself exactly
+            router.insert(p_str, ()).ok();
 
             // Express-style prefix matching: /path should match /path, /path/, and /path/sub
-            if p == "/" {
+            if p_str == "/" {
+                // For root, /*path covers everything except root itself (which we caught above)
                 router.insert("/*path", ()).ok();
             } else {
-                let prefix_path = if p.ends_with('/') {
-                    format!("{}*path", p)
-                } else {
-                    format!("{}/*path", p)
-                };
+                let prefix_path = format!("{}/*path", p_str.trim_end_matches('/'));
                 router.insert(prefix_path, ()).ok();
             }
 
@@ -246,19 +248,19 @@ impl<B: Send + 'static> Router<B> {
 
         let mut path_exists = false;
 
-        if let Some(method_routes) = self.routes.get(method)
-            && let Ok(route_match) = method_routes.matcher.at(path)
-        {
-            path_exists = true;
+        if let Some(method_routes) = self.routes.get(method) {
+            if let Ok(route_match) = method_routes.matcher.at(path) {
+                path_exists = true;
 
-            if !route_match.params.is_empty() {
-                for (k, v) in route_match.params.iter() {
-                    let sym_k = INTERNER.get_or_intern(k);
-                    route_params.push((sym_k, v.into()));
+                if !route_match.params.is_empty() {
+                    for (k, v) in route_match.params.iter() {
+                        let sym_k = INTERNER.get_or_intern(k);
+                        route_params.push((sym_k, v.into()));
+                    }
                 }
-            }
 
-            matched.extend(method_routes.indices[*route_match.value].iter().copied());
+                matched.extend(method_routes.indices[*route_match.value].iter().copied());
+            }
         }
 
         if !path_exists {
@@ -293,6 +295,7 @@ impl<B: Send + 'static> Router<B> {
         // This is necessary because middlewares and routes are collected separately.
         if matched.len() > 1 {
             matched.sort_unstable();
+            matched.dedup();
         }
 
         let mut req_opt = Some(req);
@@ -403,97 +406,89 @@ impl<B: Send + 'static> Router<B> {
 macro_rules! define_methods {
     () => {
         /// Registers a handler for GET requests.
-        pub fn get<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn get<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Get)
         }
         /// Registers a handler for POST requests.
-        pub fn post<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn post<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Post)
         }
         /// Registers a handler for PUT requests.
-        pub fn put<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn put<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Put)
         }
         /// Registers a handler for DELETE requests.
-        pub fn delete<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn delete<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Delete)
         }
         /// Registers a handler for PATCH requests.
-        pub fn patch<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn patch<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Patch)
         }
         /// Registers a handler for HEAD requests.
-        pub fn head<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn head<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Head)
         }
         /// Registers a handler for CONNECT requests.
-        pub fn connect<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn connect<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Connect)
         }
         /// Registers a handler for TRACE requests.
-        pub fn trace<F, Fut>(
-            &mut self,
-            path: impl AsRef<str>,
-            handler: F,
-        ) -> &mut Self
+        pub fn trace<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(path, handler, $crate::router::MethodKind::Trace)
@@ -503,7 +498,10 @@ macro_rules! define_methods {
         /// Registers a handler for GET requests.
         pub fn get<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Get)
@@ -511,7 +509,10 @@ macro_rules! define_methods {
         /// Registers a handler for POST requests.
         pub fn post<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Post)
@@ -519,7 +520,10 @@ macro_rules! define_methods {
         /// Registers a handler for PUT requests.
         pub fn put<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Put)
@@ -527,7 +531,10 @@ macro_rules! define_methods {
         /// Registers a handler for DELETE requests.
         pub fn delete<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Delete)
@@ -535,7 +542,10 @@ macro_rules! define_methods {
         /// Registers a handler for PATCH requests.
         pub fn patch<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Patch)
@@ -543,7 +553,10 @@ macro_rules! define_methods {
         /// Registers a handler for HEAD requests.
         pub fn head<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Head)
@@ -551,7 +564,10 @@ macro_rules! define_methods {
         /// Registers a handler for CONNECT requests.
         pub fn connect<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Connect)
@@ -559,7 +575,10 @@ macro_rules! define_methods {
         /// Registers a handler for TRACE requests.
         pub fn trace<F, Fut>(&mut self, handler: F) -> &mut Self
         where
-            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut + Send + Sync + 'static,
+            F: Fn($crate::handler::Request<B>, $crate::handler::Response) -> Fut
+                + Send
+                + Sync
+                + 'static,
             Fut: std::future::Future<Output = $crate::handler::Response> + Send + 'static,
         {
             self.add_route(handler, $crate::router::MethodKind::Trace)

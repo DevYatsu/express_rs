@@ -12,7 +12,7 @@ pub type Request<B = Incoming> = HRequest<B>;
 #[derive(Debug, Clone, Copy)]
 pub struct ClientAddr(
     /// The actual socket address of the client
-    pub SocketAddr
+    pub SocketAddr,
 );
 
 /// Wraps TLS connection status for injection into request extensions.
@@ -182,7 +182,7 @@ impl<B> RequestExt<B> for Request<B> {
 #[derive(Debug, Clone)]
 pub struct RouteParams(
     /// Internal representation of the route parameters.
-    SmallVec<[(Symbol, Arc<str>); 4]>
+    SmallVec<[(Symbol, Arc<str>); 4]>,
 );
 
 impl RouteParams {

@@ -1,4 +1,5 @@
-use express_rs::prelude::*;
+use expressjs::express_state;
+use expressjs::prelude::*;
 use hyper::header::{self, HeaderValue};
 use local_ip_address::local_ip;
 use log::info;
@@ -21,8 +22,6 @@ fn setup_logger() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-use express_rs::express_state;
-
 #[derive(Debug, Default)]
 pub struct State {
     request_count: AtomicU32,
@@ -38,17 +37,11 @@ async fn main() {
     let mut app = express();
 
     // Middleware
-    app.use_with("/{*p}", NormalizePathMiddleware::new())
-        .use_with(
-            "/src/{*p}",
-            StaticServeMiddleware::new("../express_rs/").max_age(86400),
-        )
+    app.use_global(NormalizePathMiddleware::new())
+        .use_global(CorsMiddleware::permissive())
+        .use_global(LoggingMiddleware)
         .use_with("/css/{*p}", StaticServeMiddleware::new("."))
-        .use_with("/expressjs_tests/{*p}", StaticServeMiddleware::new("."))
-        .use_with("/{*p}", CorsMiddleware::permissive());
-
-    #[cfg(debug_assertions)]
-    app.use_with("/{*p}", LoggingMiddleware);
+        .use_with("/expressjs_tests/{*p}", StaticServeMiddleware::new("."));
 
     // Routes
 
@@ -64,7 +57,7 @@ async fn main() {
             <link rel="stylesheet" href="/css/index.css"/>
         </head>
         <body>
-            <h1>Welcome to express_rs</h1>
+            <h1>Welcome to expressjs</h1>
             <p>This is a minimal HTML page served from Rust.</p>
             <ul>
                 <li><a href="/json">JSON Endpoint</a></li>
@@ -105,9 +98,7 @@ async fn main() {
     });
 
     // GET /redirect - redirect to /
-    app.get("/redirect", async |_req, res| {
-        res.redirect("/")
-    });
+    app.get("/redirect", async |_req, res| res.redirect("/"));
 
     // GET /status - always 400
     app.get("/status", async |_req, res| {
@@ -146,9 +137,7 @@ async fn main() {
         .post(async |_req, res| res.send_text("Post User"));
 
     // all() - matches every HTTP method
-    app.all("/ping", async |_req, res| {
-        res.send_text("pong")
-    });
+    app.all("/ping", async |_req, res| res.send_text("pong"));
 
     // Custom 404 handler
     app.not_found(async |_req, res| {
