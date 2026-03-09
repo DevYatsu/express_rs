@@ -122,7 +122,7 @@ async fn test_request_locals_persistence() {
 #[tokio::test]
 async fn test_nested_router() {
     let mut app = App::<()>::default();
-    let mut api = expressjs::router::Router::<()>::default();
+    let mut api = Router::<()>::default();
 
     api.get("/hello", |_, res: Response| async move {
         res.send_text("api hello")

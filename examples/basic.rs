@@ -146,11 +146,11 @@ async fn main() {
     });
 
     // Listen
-    app.listen(PORT, async || {
+    app.listen(PORT, async |port| {
         let local_ip = local_ip().unwrap();
         info!("🚀 Server running!");
-        info!("📍 Local:   http://localhost:{PORT}/");
-        info!("🌐 Network: http://{local_ip}:{PORT}/");
+        info!("📍 Local:   http://localhost:{port}/");
+        info!("🌐 Network: http://{local_ip}:{port}/");
     })
     .await
 }

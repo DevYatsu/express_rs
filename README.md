@@ -58,6 +58,7 @@ async fn main() {
 
     // Built-in middleware
     app.use_with("/{*p}", LoggingMiddleware);
+    // or similarly app.use_global(LoggingMiddleware);
 
     // Simple routing
     app.get("/", async |_req, res| {
@@ -71,7 +72,7 @@ async fn main() {
 
     // Start server
     app.listen(3000, || async {
-        println!("🚀 Server listening on http://localhost:3000");
+        println!("Server listening on http://localhost:3000");
     }).await;
 }
 ```
@@ -101,10 +102,10 @@ A robust set of middlewares is provided out of the box to help secure and optimi
 use expressjs::middleware::{rate_limit::*, security_headers::*};
 
 // Restrict to 100 requests per 15 minutes per IP
-app.use_with("/{*p}", RateLimit::new(100, std::time::Duration::from_secs(900)));
+app.use_global(RateLimit::new(100, std::time::Duration::from_secs(900)));
 
 // Apply secure HTTP headers
-app.use_with("/{*p}", SecurityHeaders::default());
+app.use_global(SecurityHeaders::default());
 ```
 
 ## Performance

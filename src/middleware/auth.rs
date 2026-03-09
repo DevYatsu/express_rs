@@ -19,7 +19,6 @@ pub mod validator;
 
 use crate::handler::{ExpressResponse, Request, Response};
 use crate::middleware::{Middleware, MiddlewareResult, next_res, stop_res};
-use async_trait::async_trait;
 use config::CookieAuthConfig;
 use cookies::CookieHandler;
 use error::{AuthError, AuthResult};
@@ -152,7 +151,7 @@ impl std::fmt::Debug for AuthMiddleware {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Middleware for AuthMiddleware {
     async fn call(&self, req: &mut Request, res: &mut Response) -> MiddlewareResult {
         let path = req.uri().path().to_owned();

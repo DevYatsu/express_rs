@@ -9,9 +9,14 @@ use std::sync::Arc;
 use tokio_rustls::rustls::ServerConfig;
 
 /// The main application structure for `expressjs`.
+///
+/// Create an instance using [`crate::app()`] or [`crate::express()`].
+///
+/// `App` exposes a fluent builder API for registering routes, middleware,
+/// and finally starting the HTTP(S) server with [`App::listen`] /
+/// [`App::listen_https`].
 pub struct App<B: Send + 'static = Incoming> {
-    /// The inner router used by the application to match and handle paths.
-    pub router: Router<B>,
+    pub(crate) router: Router<B>,
 }
 
 impl<B: Send + 'static> Default for App<B> {
@@ -94,12 +99,12 @@ impl App<Incoming> {
     pub async fn listen<T, Fut>(self, port: u16, callback: T)
     where
         Self: Sized + Send + Sync + 'static,
-        T: FnOnce() -> Fut,
+        T: FnOnce(u16) -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let app = Arc::new(self);
-        callback().await;
+        callback(port).await;
 
         let factory = move |addr: SocketAddr| {
             let app = app.clone();
@@ -123,12 +128,12 @@ impl App<Incoming> {
     pub async fn listen_https<T, Fut>(self, port: u16, tls_config: ServerConfig, callback: T)
     where
         Self: Sized + Send + Sync + 'static,
-        T: FnOnce() -> Fut,
+        T: FnOnce(u16) -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let app = Arc::new(self);
-        callback().await;
+        callback(port).await;
 
         let factory = move |addr: SocketAddr| {
             let app = app.clone();
