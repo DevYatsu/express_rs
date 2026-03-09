@@ -51,27 +51,26 @@ express_rs = "0.1.0"
 
 ```rust,ignore
 use express_rs::prelude::*;
-use express_rs::reexports::Lazy;
 
 #[tokio::main]
 async fn main() {
     let mut app = express();
 
     // Built-in middleware
-    app.use_middleware(express_rs::middleware::logging::LoggingMiddleware);
+    app.use_with("/{*p}", LoggingMiddleware);
 
     // Simple routing
-    app.get("/", |_req, mut res, _| {
-        res.send("Hello from express_rs!");
+    app.get("/", async |_req: Request, res: Response| {
+        res.send_text("Hello from express_rs!")
     });
 
     // JSON response
-    app.get("/api/ping", |_req, mut res, _| {
-        res.json(serde_json::json!({ "status": "ok", "message": "pong" }));
+    app.get("/api/ping", async |_req: Request, res: Response| {
+        res.send_json(&serde_json::json!({ "status": "ok", "message": "pong" }))
     });
 
     // Start server
-    let _ = app.listen(3000, || async {
+    app.listen(3000, || async {
         println!("🚀 Server listening on http://localhost:3000");
     }).await;
 }
@@ -84,10 +83,12 @@ Just like Express, you can mount routers to organize your controllers:
 ```rust,ignore
 use express_rs::router::Router;
 
-let mut users_router = Router::new();
-users_router.get("/", |_req, mut res, _| { res.send("List of users"); });
-users_router.post("/", |_req, mut res, _| { res.send("User created"); });
-users_router.get("/:id", |_req, mut res, _| { res.send("User details"); });
+let mut app = express();
+
+let mut users_router = Router::default();
+users_router.get("/", |_req: Request, res: Response| async { res.send_text("List of users") });
+users_router.post("/", |_req: Request, res: Response| async { res.send_text("User created") });
+users_router.get("/:id", |_req: Request, res: Response| async { res.send_text("User details") });
 
 app.use_router("/users", users_router);
 ```
@@ -100,10 +101,10 @@ A robust set of middlewares is provided out of the box to help secure and optimi
 use express_rs::middleware::{rate_limit::*, security_headers::*};
 
 // Restrict to 100 requests per 15 minutes per IP
-app.use_middleware(RateLimit::new(100, std::time::Duration::from_secs(900)).into_middleware());
+app.use_with("/{*p}", RateLimit::new(100, std::time::Duration::from_secs(900)));
 
 // Apply secure HTTP headers
-app.use_middleware(SecurityHeaders::default().into_middleware());
+app.use_with("/{*p}", SecurityHeaders::default());
 ```
 
 ## Performance
