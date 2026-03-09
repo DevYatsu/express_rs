@@ -7,7 +7,6 @@
     <a href="https://crates.io/crates/expressjs"><img src="https://img.shields.io/crates/v/expressjs.svg" alt="Crates.io" /></a>
     <a href="https://docs.rs/expressjs"><img src="https://docs.rs/expressjs/badge.svg" alt="docs.rs" /></a>
     <a href="https://github.com/DevYatsu/expressjs/actions"><img src="https://img.shields.io/github/actions/workflow/status/DevYatsu/expressjs/ci.yml" alt="CI Status" /></a>
-    <a href="https://crates.io/crates/expressjs"><img src="https://img.shields.io/crates/d/expressjs.svg" alt="Downloads" /></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   </p>
 </div>
