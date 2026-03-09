@@ -87,7 +87,6 @@ impl ResponseBody {
     }
 }
 
-
 impl Default for Response {
     fn default() -> Self {
         Self::new()

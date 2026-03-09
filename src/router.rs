@@ -250,18 +250,19 @@ impl<B: Send + 'static> Router<B> {
         let mut path_exists = false;
 
         if let Some(method_routes) = self.routes.get(method)
-            && let Ok(route_match) = method_routes.matcher.at(path) {
-                path_exists = true;
+            && let Ok(route_match) = method_routes.matcher.at(path)
+        {
+            path_exists = true;
 
-                if !route_match.params.is_empty() {
-                    for (k, v) in route_match.params.iter() {
-                        let sym_k = INTERNER.get_or_intern(k);
-                        route_params.push((sym_k, v.into()));
-                    }
+            if !route_match.params.is_empty() {
+                for (k, v) in route_match.params.iter() {
+                    let sym_k = INTERNER.get_or_intern(k);
+                    route_params.push((sym_k, v.into()));
                 }
-
-                matched.extend(method_routes.indices[*route_match.value].iter().copied());
             }
+
+            matched.extend(method_routes.indices[*route_match.value].iter().copied());
+        }
 
         if !path_exists {
             // Check if path exists under a different method (=> 405 vs 404).
@@ -278,9 +279,10 @@ impl<B: Send + 'static> Router<B> {
             let status = if path_exists { 405 } else { 404 };
 
             if status == 404
-                && let Some(h) = &self.not_found_handler {
-                    return h.call(req, res).await;
-                }
+                && let Some(h) = &self.not_found_handler
+            {
+                return h.call(req, res).await;
+            }
 
             return res.status_code(status).send_text(match status {
                 404 => "Not Found",
@@ -304,9 +306,10 @@ impl<B: Send + 'static> Router<B> {
             let layer = &self.stack[i];
 
             if let Some(m) = &layer.method
-                && *m != method {
-                    continue;
-                }
+                && *m != method
+            {
+                continue;
+            }
 
             for mw in &layer.middlewares {
                 let req_mut = req_opt.as_mut().unwrap();
@@ -327,11 +330,12 @@ impl<B: Send + 'static> Router<B> {
         let status = if path_exists { 405 } else { 404 };
 
         if status == 404
-            && let Some(h) = &self.not_found_handler {
-                return h
-                    .call(req_opt.take().unwrap(), res_opt.take().unwrap())
-                    .await;
-            }
+            && let Some(h) = &self.not_found_handler
+        {
+            return h
+                .call(req_opt.take().unwrap(), res_opt.take().unwrap())
+                .await;
+        }
 
         res_opt
             .unwrap()

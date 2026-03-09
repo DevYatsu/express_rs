@@ -117,9 +117,10 @@ impl Middleware for CorsMiddleware {
 
         if let Some(o) = origin
             && is_allowed_origin
-            && let Ok(val) = HeaderValue::from_str(o) {
-                res.header("Access-Control-Allow-Origin", val);
-            }
+            && let Ok(val) = HeaderValue::from_str(o)
+        {
+            res.header("Access-Control-Allow-Origin", val);
+        }
 
         if self.allow_credentials {
             res.header(
