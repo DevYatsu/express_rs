@@ -13,7 +13,7 @@
 //! - All built-in middleware types and the [`Middleware`] trait
 //! - [`Router`], [`MethodKind`]
 //! - [`StatusCode`] from `hyper`
-//! - The [`async_trait`] attribute macro (for custom middleware impls)
+//! - The [`macro@async_trait`] attribute macro (for custom middleware impls)
 //! - The [`Serialize`] / [`Deserialize`] derive macros from `serde`
 
 pub use crate::application::App;

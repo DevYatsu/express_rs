@@ -270,7 +270,7 @@ impl Response {
         let mime = Path::new(path_str)
             .extension()
             .and_then(|ext| ext.to_str())
-            .and_then(|ext| mime_guess::from_ext(ext).first_raw())
+            .map(ext_to_mime)
             .unwrap_or("application/octet-stream");
 
         let header_val = if mime.starts_with("text/")
@@ -478,8 +478,62 @@ fn sanitize_header_value(val: &str) -> HeaderValue {
     HeaderValue::from_str(val).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
+/// Maps a file extension to its canonical MIME type string.
+///
+/// Returns `"application/octet-stream"` as the fallback — callers apply
+/// `; charset=utf-8` for text types via [`mime_to_header_value`].
+#[inline]
+fn ext_to_mime(ext: &str) -> &'static str {
+    match ext {
+        // Text
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "txt" | "text" => "text/plain",
+        "csv" => "text/csv",
+        "xml" => "text/xml",
+        "md" => "text/markdown",
+        // Scripts
+        "js" | "mjs" => "application/javascript",
+        "ts" => "application/typescript",
+        // Data
+        "json" => "application/json",
+        "jsonl" | "ndjson" => "application/x-ndjson",
+        "yaml" | "yml" => "application/yaml",
+        "toml" => "application/toml",
+        "wasm" => "application/wasm",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        // Images
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        // Fonts
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        // Audio / Video
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Concurrent, shard-sharded file cache.
 static FILE_CACHE: Lazy<Cache<String, (HeaderValue, Bytes)>> = Lazy::new(|| Cache::new(100));
+
 
 #[cfg(test)]
 mod tests {
