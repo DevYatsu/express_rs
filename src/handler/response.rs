@@ -55,8 +55,10 @@ pub struct Response {
 }
 
 /// The body of an HTTP response.
+#[derive(Default)]
 pub enum ResponseBody {
     /// An empty body.
+    #[default]
     Empty,
     /// A single chunk body.
     Full(Bytes),
@@ -85,11 +87,6 @@ impl ResponseBody {
     }
 }
 
-impl Default for ResponseBody {
-    fn default() -> Self {
-        ResponseBody::Empty
-    }
-}
 
 impl Default for Response {
     fn default() -> Self {

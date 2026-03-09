@@ -17,6 +17,7 @@ impl CookieHandler {
         Ok(jar.get(cookie_name).map(|c| c.value().to_string()))
     }
 
+    #[allow(dead_code)]
     /// Gets all cookies from the request as a `CookieJar`.
     pub fn get_all_cookies(req: &Request) -> AuthResult<CookieJar> {
         Self::build_jar(req)
@@ -45,6 +46,7 @@ impl CookieHandler {
         Ok(jar)
     }
 
+    #[allow(dead_code)]
     /// Creates a new session cookie with the given config.
     pub fn create_session_cookie(
         name: &str,
@@ -72,6 +74,7 @@ impl CookieHandler {
         cookie.build()
     }
 
+    #[allow(dead_code)]
     /// Creates a cookie that clears the session (logout).
     pub fn create_logout_cookie(name: &str, config: &CookieAuthConfig) -> Cookie<'static> {
         Cookie::build((name.to_owned(), ""))

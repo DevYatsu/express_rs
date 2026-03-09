@@ -19,11 +19,11 @@ pub mod prelude;
 /// # Example
 ///
 /// ```rust,no_run
-/// use expressjs::app;
+/// use expressjs::prelude::*;
 ///
 /// #[expressjs::main]
 /// async fn main() {
-///     let mut app = app();
+///     let mut app = express();
 ///     app.get("/", async |_req, res| res.send_text("Hello, world!"));
 ///     app.listen(3000, async |port| println!("Listening on port {port}")).await;
 /// }
@@ -35,7 +35,7 @@ pub use middleware::app;
 /// # Example
 ///
 /// ```rust,no_run
-/// use expressjs::express;
+/// use expressjs::prelude::*;
 ///
 /// #[expressjs::main]
 /// async fn main() {

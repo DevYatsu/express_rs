@@ -104,24 +104,20 @@ impl<B: Send + Sync + 'static> Middleware<B> for StaticServeMiddleware {
         let etag_val = format!("W/\"{:x}-{:x}\"", metadata.len(), timestamp);
 
         // Check conditional match (ETag)
-        if let Some(if_none_match) = req.headers().get(IF_NONE_MATCH) {
-            if if_none_match.to_str().unwrap_or_default() == etag_val {
+        if let Some(if_none_match) = req.headers().get(IF_NONE_MATCH)
+            && if_none_match.to_str().unwrap_or_default() == etag_val {
                 *res = Response::new().status(hyper::StatusCode::NOT_MODIFIED);
                 return stop_res();
             }
-        }
 
         // Check conditional match (Last-Modified)
-        if let Some(if_modified_since) = req.headers().get(IF_MODIFIED_SINCE) {
-            if let Ok(since) =
+        if let Some(if_modified_since) = req.headers().get(IF_MODIFIED_SINCE)
+            && let Ok(since) =
                 httpdate::parse_http_date(if_modified_since.to_str().unwrap_or_default())
-            {
-                if last_modified <= since {
+                && last_modified <= since {
                     *res = Response::new().status(hyper::StatusCode::NOT_MODIFIED);
                     return stop_res();
                 }
-            }
-        }
 
         let temp_res = std::mem::take(res);
         let mut new_res = temp_res.send_file(&file_path).await;
@@ -132,11 +128,10 @@ impl<B: Send + Sync + 'static> Middleware<B> for StaticServeMiddleware {
         }
 
         // Apply caching headers
-        if let Some(max_age) = self.max_age {
-            if let Ok(val) = HeaderValue::from_str(&format!("public, max-age={}", max_age)) {
+        if let Some(max_age) = self.max_age
+            && let Ok(val) = HeaderValue::from_str(&format!("public, max-age={}", max_age)) {
                 new_res = new_res.header(CACHE_CONTROL, val);
             }
-        }
 
         // Add ETag and Last-Modified
         if let Ok(val) = HeaderValue::from_str(&etag_val) {

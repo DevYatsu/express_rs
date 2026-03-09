@@ -189,11 +189,12 @@ impl<B: Send + 'static> Router<B> {
             router.insert(p_str, ()).ok();
 
             // Express-style prefix matching: /path should match /path, /path/, and /path/sub
+            // matchit 0.9+ requires the {*param} wildcard syntax (not the old /*param).
             if p_str == "/" {
-                // For root, /*path covers everything except root itself (which we caught above)
-                router.insert("/*path", ()).ok();
+                // Root: /{*path} matches every sub-path; exact "/" was already inserted above.
+                router.insert("/{*path}", ()).ok();
             } else {
-                let prefix_path = format!("{}/*path", p_str.trim_end_matches('/'));
+                let prefix_path = format!("{}/{{*path}}", p_str.trim_end_matches('/'));
                 router.insert(prefix_path, ()).ok();
             }
 
@@ -248,8 +249,8 @@ impl<B: Send + 'static> Router<B> {
 
         let mut path_exists = false;
 
-        if let Some(method_routes) = self.routes.get(method) {
-            if let Ok(route_match) = method_routes.matcher.at(path) {
+        if let Some(method_routes) = self.routes.get(method)
+            && let Ok(route_match) = method_routes.matcher.at(path) {
                 path_exists = true;
 
                 if !route_match.params.is_empty() {
@@ -261,7 +262,6 @@ impl<B: Send + 'static> Router<B> {
 
                 matched.extend(method_routes.indices[*route_match.value].iter().copied());
             }
-        }
 
         if !path_exists {
             // Check if path exists under a different method (=> 405 vs 404).
@@ -277,11 +277,10 @@ impl<B: Send + 'static> Router<B> {
         if matched.is_empty() {
             let status = if path_exists { 405 } else { 404 };
 
-            if status == 404 {
-                if let Some(h) = &self.not_found_handler {
+            if status == 404
+                && let Some(h) = &self.not_found_handler {
                     return h.call(req, res).await;
                 }
-            }
 
             return res.status_code(status).send_text(match status {
                 404 => "Not Found",
@@ -304,11 +303,10 @@ impl<B: Send + 'static> Router<B> {
         for i in matched {
             let layer = &self.stack[i];
 
-            if let Some(m) = &layer.method {
-                if *m != method {
+            if let Some(m) = &layer.method
+                && *m != method {
                     continue;
                 }
-            }
 
             for mw in &layer.middlewares {
                 let req_mut = req_opt.as_mut().unwrap();
@@ -328,13 +326,12 @@ impl<B: Send + 'static> Router<B> {
 
         let status = if path_exists { 405 } else { 404 };
 
-        if status == 404 {
-            if let Some(h) = &self.not_found_handler {
+        if status == 404
+            && let Some(h) = &self.not_found_handler {
                 return h
                     .call(req_opt.take().unwrap(), res_opt.take().unwrap())
                     .await;
             }
-        }
 
         res_opt
             .unwrap()
@@ -372,10 +369,11 @@ impl<B: Send + 'static> Router<B> {
                     let mut r = matchit::Router::new();
                     r.insert(p, ()).expect("Failed to insert nested middleware");
                     // Include wildcard sub-path so mounted middleware also matches /prefix/sub/paths
+                    // matchit 0.9+ requires the {*param} wildcard syntax.
                     if p == "/" {
-                        r.insert("/*path", ()).ok();
+                        r.insert("/{*path}", ()).ok();
                     } else {
-                        let wildcard = format!("{}/*path", p);
+                        let wildcard = format!("{}/{{*path}}", p);
                         r.insert(&wildcard, ()).ok();
                     }
                     let new_idx = self.middleware_matchers.len();
