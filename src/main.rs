@@ -53,7 +53,7 @@ async fn main() {
     // Routes
 
     // GET / - index page
-    app.get("/", async |_req: Request, res: Response| {
+    app.get("/", async |_req, res| {
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -82,7 +82,7 @@ async fn main() {
     });
 
     // GET /count - request counter
-    app.get("/count", async |_req: Request, res: Response| {
+    app.get("/count", async |_req, res| {
         let count = STATE.request_count.fetch_add(1, Ordering::Relaxed);
 
         res.send_json(&json!({
@@ -92,7 +92,7 @@ async fn main() {
     });
 
     // GET /json - static JSON response
-    app.get("/json", async |_req: Request, res: Response| {
+    app.get("/json", async |_req, res| {
         res.header(
             hyper::header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=3600"),
@@ -105,23 +105,23 @@ async fn main() {
     });
 
     // GET /redirect - redirect to /
-    app.get("/redirect", async |_req: Request, res: Response| {
+    app.get("/redirect", async |_req, res| {
         res.redirect("/")
     });
 
     // GET /status - always 400
-    app.get("/status", async |_req: Request, res: Response| {
+    app.get("/status", async |_req, res| {
         res.status_code(400).send_text("400 Bad Request")
     });
 
     // GET /status/:status - echo status param
-    app.get("/status/{status}", async |req: Request, res: Response| {
+    app.get("/status/{status}", async |req, res| {
         let value = req.params().get("status").unwrap_or("unknown");
         res.send_text(format!("Status is {value}"))
     });
 
     // GET /file - stream Cargo.lock (async, borrows res across await)
-    app.get("/file", async |_req: Request, res: Response| {
+    app.get("/file", async |_req, res| {
         res.send_file("./Cargo.lock").await
     });
 
@@ -131,7 +131,7 @@ async fn main() {
     //     stop_res()
     // });
 
-    app.get("/hello", async |_req: Request, res: Response| {
+    app.get("/hello", async |_req, res| {
         res.body("Hello, world!")
             .header(
                 header::CACHE_CONTROL,
@@ -142,16 +142,16 @@ async fn main() {
 
     // Route builder pattern - multiple methods on the same path
     app.route("/api/v1/user")
-        .get(async |_req: Request, res: Response| res.send_text("Get User"))
-        .post(async |_req: Request, res: Response| res.send_text("Post User"));
+        .get(async |_req, res| res.send_text("Get User"))
+        .post(async |_req, res| res.send_text("Post User"));
 
     // all() - matches every HTTP method
-    app.all("/ping", async |_req: Request, res: Response| {
+    app.all("/ping", async |_req, res| {
         res.send_text("pong")
     });
 
     // Custom 404 handler
-    app.not_found(async |_req: Request, res: Response| {
+    app.not_found(async |_req, res| {
         res.status_code(404)
             .send_text("Custom 404: Page not found!")
     });

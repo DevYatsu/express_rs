@@ -45,13 +45,21 @@ impl<B: Send + 'static> App<B> {
     }
 
     /// Sets a generic handler when no route matches the requested path.
-    pub fn not_found(&mut self, handler: impl Handler<B>) -> &mut Self {
+    pub fn not_found<F, Fut>(&mut self, handler: F) -> &mut Self
+    where
+        F: Fn(Request<B>, Response) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Response> + Send + 'static,
+    {
         self.router.not_found(handler);
         self
     }
 
     /// Registers a handler for all HTTP methods on the specified path.
-    pub fn all(&mut self, path: impl AsRef<str>, handler: impl Handler<B> + Clone) -> &mut Self {
+    pub fn all<F, Fut>(&mut self, path: impl AsRef<str>, handler: F) -> &mut Self
+    where
+        F: Fn(Request<B>, Response) -> Fut + Send + Sync + Clone + 'static,
+        Fut: std::future::Future<Output = Response> + Send + 'static,
+    {
         self.router.all(path, handler);
         self
     }

@@ -18,7 +18,7 @@
 
 **express_rs** aims to provide a clean, expressive, and flexible web framework modeled after the ergonomics of Express.js, but with the performance, safety guarantees, and zero-cost abstractions of Rust.
 
-Our goal is simple: **no macro magic, no boilerplate—just modular, async-first routing, powerful middleware, and composable handlers.**
+Our goal is simple: **no macro magic, no boilerplate, just modular, async-first routing, powerful middleware, and composable handlers.**
 
 ## Features
 
@@ -60,12 +60,12 @@ async fn main() {
     app.use_with("/{*p}", LoggingMiddleware);
 
     // Simple routing
-    app.get("/", async |_req: Request, res: Response| {
+    app.get("/", async |_req, res| {
         res.send_text("Hello from express_rs!")
     });
 
     // JSON response
-    app.get("/api/ping", async |_req: Request, res: Response| {
+    app.get("/api/ping", async |_req, res| {
         res.send_json(&serde_json::json!({ "status": "ok", "message": "pong" }))
     });
 
@@ -86,9 +86,9 @@ use express_rs::router::Router;
 let mut app = express();
 
 let mut users_router = Router::default();
-users_router.get("/", |_req: Request, res: Response| async { res.send_text("List of users") });
-users_router.post("/", |_req: Request, res: Response| async { res.send_text("User created") });
-users_router.get("/:id", |_req: Request, res: Response| async { res.send_text("User details") });
+users_router.get("/", |_req, res| async { res.send_text("List of users") });
+users_router.post("/", |_req, res| async { res.send_text("User created") });
+users_router.get("/:id", |_req, res| async { res.send_text("User details") });
 
 app.use_router("/users", users_router);
 ```
@@ -110,7 +110,7 @@ app.use_with("/{*p}", SecurityHeaders::default());
 ## Performance
 
 `express_rs` is built for speed:
-- Routes are resolved natively using a specialized Radix tree (`matchthem`).
+- Routes are resolved natively using a specialized Radix tree.
 - Minimal to **zero** heap allocations on a typical incoming HTTP request due to clever internal optimizations.
 - Handlers are represented as lightweight function pointers/closures under a uniform `Handler` trait.
 
